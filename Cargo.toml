@@ -1,0 +1,21 @@
+[package]
+name = "qimem"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "qimem"
+crate-type = ["cdylib"]
+
+[dependencies]
+chacha20poly1305 = "0.10.1"
+argon2 = "0.5.3"
+ed25519-dalek = { version = "2.1.1", features = ["rand_core", "serde"] }
+rand = "0.8.5"
+rand_core = { version = "0.6.4", features = ["std"] }
+pyo3 = { version = "0.22.2", features = ["extension-module"] }
+thiserror = "1.0.63"
+base64 = "0.22.1"
+
+[dev-dependencies]
+tempfile = "3.13.0"
