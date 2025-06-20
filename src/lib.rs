@@ -1,7 +1,6 @@
 use pyo3::prelude::{pymodule, pyfunction, PyModule, PyResult, Python};
 use pyo3::{wrap_pyfunction_bound, PyErr, Bound, Py};
 use pyo3::types::{PyModuleMethods, PyBytes};
-use ed25519_dalek::SigningKey;
 
 #[cfg(test)]
 mod tests;
@@ -64,17 +63,18 @@ fn decrypt_file(input_path: String, output_path: String, key: Vec<u8>) -> PyResu
 
 #[pyfunction]
 fn generate_keypair() -> PyResult<(Vec<u8>, Vec<u8>)> {
-    let keypair = signing::generate_keypair();
-    Ok((keypair.verifying_key().to_bytes().to_vec(), keypair.to_bytes().to_vec()))
+    use ring::signature::KeyPair; // Import trait for public_key()
+    let (keypair, pkcs8_bytes) = signing::generate_keypair();
+    let public_key = keypair.public_key().as_ref(); // Extract public key bytes
+    Ok((public_key.to_vec(), pkcs8_bytes))
 }
 
 #[pyfunction]
 fn sign_message(secret_key: Vec<u8>, message: Vec<u8>) -> PyResult<Vec<u8>> {
-    let key_array: [u8; 32] = secret_key
-        .try_into()
-        .map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("Secret key must be 32 bytes"))?;
-    let signing_key = SigningKey::from_bytes(&key_array);
-    Ok(signing::sign_message(&signing_key, &message))
+    let keypair = ring::signature::Ed25519KeyPair::from_pkcs8(&secret_key)
+        .map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid secret key"))?;
+    let signature = keypair.sign(&message);
+    Ok(signature.as_ref().to_vec())
 }
 
 #[pyfunction]
