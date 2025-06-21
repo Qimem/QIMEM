@@ -1,8 +1,8 @@
 #[cfg(test)]
-mod cipher_test;
+pub mod cipher_test;
 #[cfg(test)]
-mod file_encryption_test;
+pub mod file_encryption_test;
 #[cfg(test)]
-mod key_derivation_test;
+pub mod key_derivation_test;
 #[cfg(test)]
-mod signing_test;
+pub mod signing_test;

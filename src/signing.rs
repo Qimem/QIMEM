@@ -1,22 +1,53 @@
-use ring::rand::SystemRandom;
-use ring::signature::{Ed25519KeyPair, Signature, UnparsedPublicKey, ED25519};
+use ring::rand::{SecureRandom, SystemRandom};
+use ring::signature::{Ed25519KeyPair, KeyPair};
+use thiserror::Error;
 
-pub fn generate_keypair() -> (Ed25519KeyPair, Vec<u8>) {
+#[derive(Error, Debug)]
+pub enum SigningError {
+    #[error("Key generation failed")]
+    KeyGenFailed,
+    #[error("Signing failed")]
+    SignFailed,
+    #[error("Verification failed")]
+    VerifyFailed,
+}
+
+pub fn generate_keypair() -> Result<([u8; 32], [u8; 32]), SigningError> {
     let rng = SystemRandom::new();
-    let pkcs8_document = Ed25519KeyPair::generate_pkcs8(&rng)
-        .expect("RNG failure");
-    let pkcs8_bytes = pkcs8_document.as_ref().to_vec();
-    let keypair = Ed25519KeyPair::from_pkcs8(&pkcs8_bytes)
-        .expect("Invalid key");
-    (keypair, pkcs8_bytes)
+    
+    // 1. Create a random 32-byte seed. This is the most fundamental form of the secret key.
+    let mut seed = [0u8; 32];
+    rng.fill(&mut seed).map_err(|_| SigningError::KeyGenFailed)?;
+
+    // 2. Create a key pair directly from the seed.
+    let key_pair = Ed25519KeyPair::from_seed_unchecked(&seed)
+        .map_err(|_| SigningError::KeyGenFailed)?;
+    
+    // 3. Derive the public key from the same key pair.
+    let public_key: [u8; 32] = key_pair.public_key().as_ref()
+        .try_into()
+        .map_err(|_| SigningError::KeyGenFailed)?;
+
+    // 4. Return the public key and the seed. The seed now serves as our secret_key.
+    // This guarantees the public key and secret key are a matched pair.
+    Ok((public_key, seed))
 }
 
-pub fn sign_message(keypair: &Ed25519KeyPair, message: &[u8]) -> Vec<u8> {
-    let signature: Signature = keypair.sign(message);
-    signature.as_ref().to_vec()
+pub fn sign_message(secret_key: &[u8; 32], message: &[u8]) -> Result<Vec<u8>, SigningError> {
+    // Recreate the key pair from the secret key (which is the seed).
+    let key_pair = Ed25519KeyPair::from_seed_unchecked(secret_key)
+        .map_err(|_| SigningError::SignFailed)?;
+    
+    // Sign the message.
+    let signature = key_pair.sign(message);
+    
+    Ok(signature.as_ref().to_vec())
 }
 
-pub fn verify_signature(pub_key_bytes: &[u8], message: &[u8], sig_bytes: &[u8]) -> bool {
-    let pub_key = UnparsedPublicKey::new(&ED25519, pub_key_bytes);
-    pub_key.verify(message, sig_bytes).is_ok()
+pub fn verify_signature(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> Result<bool, SigningError> {
+    let peer_public_key = ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public_key);
+    
+    peer_public_key.verify(message, signature)
+        .map(|_| true)
+        .map_err(|_| SigningError::VerifyFailed)
 }

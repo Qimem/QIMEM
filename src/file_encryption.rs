@@ -1,19 +1,31 @@
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{Read, Write};
+use thiserror::Error;
 use crate::q_core::{encrypt, decrypt, QCoreError};
 
-pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8; 32], salt: &[u8; 16]) -> io::Result<()> {
-    let data = fs::read(input_path)?;
-    let encrypted = encrypt(&data, key, salt).map_err(|e: QCoreError| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-    let mut file = File::create(output_path)?;
-    file.write_all(&encrypted)?;
+#[derive(Error, Debug)]
+pub enum FileEncryptionError {
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+    #[error("Encryption error: {0}")]
+    EncryptionError(#[from] QCoreError),
+}
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8; 32], salt: &[u8; 16]) -> Result<(), FileEncryptionError> {
+    let mut file = File::open(input_path)?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)?;
+    let encrypted = encrypt(&data, key)?;
+    let mut output = File::create(output_path)?;
+    output.write_all(&[&salt[..], &encrypted].concat())?;
     Ok(())
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8; 32]) -> io::Result<()> {
-    let ciphertext = fs::read(input_path)?;
-    let decrypted = decrypt(&ciphertext, key).map_err(|e: QCoreError| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-    let mut file = File::create(output_path)?;
-    file.write_all(&decrypted)?;
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8; 32]) -> Result<(), FileEncryptionError> {
+    let mut file = File::open(input_path)?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)?;
+    let decrypted = decrypt(&data[16..], key)?; // Skip salt
+    fs::write(output_path, decrypted)?;
     Ok(())
 }

@@ -1,1 +1,1 @@
-/workspaces/qimem/target/x86_64-unknown-linux-gnu/release/libqimem.rlib: /workspaces/qimem/src/file_encryption.rs /workspaces/qimem/src/lib.rs /workspaces/qimem/src/q_core.rs /workspaces/qimem/src/q_keygen.rs /workspaces/qimem/src/signing.rs
+/workspaces/qimem/target/x86_64-unknown-linux-gnu/release/libqimem.so: /workspaces/qimem/src/file_encryption.rs /workspaces/qimem/src/lib.rs /workspaces/qimem/src/q_core.rs /workspaces/qimem/src/q_keygen.rs /workspaces/qimem/src/signing.rs
