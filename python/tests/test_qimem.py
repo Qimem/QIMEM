@@ -4,7 +4,7 @@ import pytest
 
 def test_encrypt_decrypt():
     try:
-        key = qimem.derive_key("password", "AxumObelisk2025አክሱም")
+        key = qimem.derive_key("password", None)
         data = b"Sensitive data"
         encrypted = qimem.encrypt(data, key)
         print(f"Encrypted type: {type(encrypted)}, value: {encrypted}")
@@ -17,7 +17,7 @@ def test_encrypt_decrypt():
 
 def test_file_encryption():
     try:
-        key = qimem.derive_key("password", "AxumObelisk2025አክሱም")
+        key = qimem.derive_key("password", None)
         with open("test.txt", "wb") as f:
             f.write(b"Secret file")
         qimem.encrypt_file("test.txt", "test.enc", key)

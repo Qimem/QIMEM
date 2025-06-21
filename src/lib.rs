@@ -4,11 +4,10 @@ use pyo3::types::{PyModuleMethods, PyBytes};
 
 #[cfg(test)]
 mod tests;
-pub mod cipher;
-pub mod key_derivation;
+pub mod q_core;
+pub mod q_keygen;
 pub mod signing;
 pub mod file_encryption;
-pub mod utils;
 
 #[pymodule]
 fn qimem(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -27,7 +26,8 @@ fn qimem(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[pyfunction]
 fn encrypt(py: Python<'_>, data: Vec<u8>, key: Vec<u8>) -> PyResult<Py<PyBytes>> {
     let key_array: [u8; 32] = key.try_into().map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("Key must be 32 bytes"))?;
-    let result = cipher::encrypt(&data, &key_array)
+    let (_, salt) = q_keygen::derive_key("", None).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let result = q_core::encrypt(&data, &key_array, &salt)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     Ok(PyBytes::new_bound(py, &result).into())
 }
@@ -35,27 +35,29 @@ fn encrypt(py: Python<'_>, data: Vec<u8>, key: Vec<u8>) -> PyResult<Py<PyBytes>>
 #[pyfunction]
 fn decrypt(py: Python<'_>, ciphertext: Vec<u8>, key: Vec<u8>) -> PyResult<Py<PyBytes>> {
     let key_array: [u8; 32] = key.try_into().map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("Key must be 32 bytes"))?;
-    let result = cipher::decrypt(&ciphertext, &key_array)
+    let result = q_core::decrypt(&ciphertext, &key_array)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     Ok(PyBytes::new_bound(py, &result).into())
 }
 
 #[pyfunction]
-fn derive_key(password: String, salt_phrase: String) -> PyResult<Vec<u8>> {
-    key_derivation::derive_key(&password, &salt_phrase)
-        .map(|key| key.to_vec())
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+#[pyo3(signature = (password, salt_phrase=None))] // Added to fix warning
+fn derive_key(_py: Python<'_>, password: String, salt_phrase: Option<String>) -> PyResult<Vec<u8>> {
+    let (key, _) = q_keygen::derive_key(&password, salt_phrase.as_deref())
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    Ok(key.to_vec())
 }
 
 #[pyfunction]
-fn encrypt_file(input_path: String, output_path: String, key: Vec<u8>) -> PyResult<()> {
+fn encrypt_file(_py: Python<'_>, input_path: String, output_path: String, key: Vec<u8>) -> PyResult<()> {
     let key_array: [u8; 32] = key.try_into().map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("Key must be 32 bytes"))?;
-    file_encryption::encrypt_file(&input_path, &output_path, &key_array)
+    let (_, salt) = q_keygen::derive_key("", None).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    file_encryption::encrypt_file(&input_path, &output_path, &key_array, &salt)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))
 }
 
 #[pyfunction]
-fn decrypt_file(input_path: String, output_path: String, key: Vec<u8>) -> PyResult<()> {
+fn decrypt_file(_py: Python<'_>, input_path: String, output_path: String, key: Vec<u8>) -> PyResult<()> {
     let key_array: [u8; 32] = key.try_into().map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("Key must be 32 bytes"))?;
     file_encryption::decrypt_file(&input_path, &output_path, &key_array)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))
@@ -63,9 +65,9 @@ fn decrypt_file(input_path: String, output_path: String, key: Vec<u8>) -> PyResu
 
 #[pyfunction]
 fn generate_keypair() -> PyResult<(Vec<u8>, Vec<u8>)> {
-    use ring::signature::KeyPair; // Import trait for public_key()
+    use ring::signature::KeyPair;
     let (keypair, pkcs8_bytes) = signing::generate_keypair();
-    let public_key = keypair.public_key().as_ref(); // Extract public key bytes
+    let public_key = keypair.public_key().as_ref();
     Ok((public_key.to_vec(), pkcs8_bytes))
 }
 
