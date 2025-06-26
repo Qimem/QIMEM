@@ -1,0 +1,1 @@
+{"rustc":15597765236515928571,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[15367738274754116744,"build_script_build",false,3816246976175077772]],"local":[{"RerunIfChanged":{"output":"debug/build/serde_json-dca33a7b24ff851e/output","paths":["build.rs"]}}],"rustflags":["-L","/usr/lib/x86_64-linux-gnu","-l","python3.8"],"config":0,"compile_kind":0}

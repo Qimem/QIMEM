@@ -1,0 +1,1 @@
+{"rustc":15597765236515928571,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[10520923840501062997,"build_script_build",false,12093628509336001768]],"local":[{"Precalculated":"0.14.7"}],"rustflags":["-L","/usr/lib/x86_64-linux-gnu","-l","python3.8"],"config":0,"compile_kind":0}

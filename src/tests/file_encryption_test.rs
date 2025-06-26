@@ -1,27 +1,26 @@
-use crate::file_encryption::*;
-use crate::q_keygen::*;
-use tempfile::NamedTempFile;
+use crate::q_keygen::derive_key;
+use crate::file_encryption::{encrypt_file, decrypt_file};
 use std::fs;
+use std::io::Read;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[test]
+fn test_encrypt_decrypt_file() {
+    let (key, salt) = derive_key("password", None).unwrap();
+    let input_path = "test_input.txt";
+    let encrypted_path = "test_encrypted.bin";
+    let decrypted_path = "test_decrypted.txt";
+    let data = b"hello file encryption";
 
-    #[test]
-    fn test_encrypt_decrypt_file() {
-        let (key, salt) = derive_key("password", None)
-            .expect("Key derivation failed");
-        let input = NamedTempFile::new().unwrap();
-        let output = NamedTempFile::new().unwrap();
-        let decrypted = NamedTempFile::new().unwrap();
+    fs::write(input_path, data).unwrap();
+    encrypt_file(input_path, encrypted_path, &key, &salt).unwrap();
+    decrypt_file(encrypted_path, decrypted_path, &key).unwrap();
 
-        fs::write(&input, b"Secret file").unwrap();
-        encrypt_file(input.path().to_str().unwrap(), output.path().to_str().unwrap(), &key, &salt)
-            .expect("File encryption failed");
-        decrypt_file(output.path().to_str().unwrap(), decrypted.path().to_str().unwrap(), &key)
-            .expect("File decryption failed");
+    let mut decrypted_data = Vec::new();
+    fs::File::open(decrypted_path).unwrap().read_to_end(&mut decrypted_data).unwrap();
 
-        let content = fs::read(decrypted.path()).unwrap();
-        assert_eq!(content, b"Secret file");
-    }
+    assert_eq!(data, decrypted_data.as_slice());
+
+    fs::remove_file(input_path).unwrap();
+    fs::remove_file(encrypted_path).unwrap();
+    fs::remove_file(decrypted_path).unwrap();
 }
