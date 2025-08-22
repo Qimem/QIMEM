@@ -1,6 +1,8 @@
 # Qimem: A Rust-Based Crypto Powerhouse for Secure Data Handling
 
-![Qimem Logo](https://placehold.co/800x200/png?text=Qimem&font=roboto) – *The name means "spice" in Amharic*
+![Qimem Logo](https://placehold.co/800x200/png?text=Qimem&font=roboto) 
+
+– *The name means "spice" in Amharic*
 
 Hey, I'm EyuKaz, the solo dev behind *Qimem*. For the past 3-4 months, I've been grinding through Rust's unforgiving compiler, endless dependency hell, and my own noob mistakes to build this crypto library and CLI. It started as a dream to create a military-grade crypto toolkit for my bigger vision with Arthimetic—custom AI, secure SMS gateways, and a Bloomberg-style market tool for Ethiopia—but life burnt that dream down. Now, I'm handing *Qimem* over to the community. It's not the next Linux (yet), but it's a solid foundation for secure key management, encryption, and more. If you're a smart dev, jump in, fix my bugs, and make it legendary. Be warned: this code's been through war, and it's got scars.
 
