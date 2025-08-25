@@ -1,6 +1,6 @@
 # Qimem: A Rust-Based Crypto Powerhouse for Secure Data Handling
 
-![Qimem Logo](https://placehold.co/800x200/png?text=Qimem&font=roboto) 
+![Qimem Logo](https://placehold.co/800x200/png?text=QIMEM&font=roboto) 
 
 – *The name means "spice" in Amharic*
 
@@ -106,4 +106,4 @@ Fork the repo on GitHub, branch your feature, and PR. Fix my bugs, add features,
 ### Contact
 I’m EyuKaz on GitHub. Open issues or PRs for questions. No DMs. let the community build this.
 
-That's *Qimem* in all its glory and gory. If it's the next Linux open-source wise, it's on you, devs. I’m moving on peace. 🚀
+That's *Qimem* in all its glory and gory. 
