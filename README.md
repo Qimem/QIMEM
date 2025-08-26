@@ -30,7 +30,7 @@ The vision was insane: real-time policy enforcement, zero-trust access, post-qua
 
 ## Errors We Encountered (The Brutal Truth)
 
-I went through absolute hell with Rust’s compiler. *Qimem* was a bug magnet, and here’s every major error we hit, why they happened, and possible solutions. Be blunt: most were my fault for noob code and bad dependency management, but Rust’s strictness didn’t help.
+I went through absolute hell with Rust’s compiler. *Qimem* was a bug magnet, and here’s every major error we hit, why they happened, and possible solutions. Tbh most were my fault for noob code and bad dependency management, but Rust’s strictness didn’t help.
 
 1. **Name Conflicts (E0255)**: Functions like `derive_key` defined multiple times in `lib.rs` (imported from modules, then redefined as `#[pyfunction]`).
    - **Why**: Rust hates duplicates in namespaces.
