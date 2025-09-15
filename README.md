@@ -4,7 +4,7 @@
 
 – *The name means "spice" in Amharic*
 
-Hey, I'm EyuKaz, the solo dev behind *Qimem*. For the past 3-4 months, I've been grinding through Rust's unforgiving compiler, endless dependency hell, and my own noob mistakes to build this crypto library and CLI. Now, I'm handing *Qimem* over to the community. It's not the next Linux (yet), but it's a solid foundation for secure key management, encryption, and more. If you're a smart dev, jump in, fix my bugs, and make it legendary. Be warned: this code's been through war, and it's got scars.
+For the past 3-4 months, I've been grinding through Rust's unforgiving compiler, endless dependency hell, and my own noob mistakes to build this crypto library and CLI. Now, I'm handing *Qimem* over to the community. It's not the next Linux (yet), but it's a solid foundation for secure key management, encryption, and more. If you're a smart dev, jump in, fix my bugs, and make it legendary. Be warned: this code's been through war, and it's got scars.
 
 This README is your bible—extra descriptive, honest, and blunt. I won't sugarcoat the mess I made. No one should ask me questions; this doc answers everything. If it doesn't, open an issue on GitHub.
 
@@ -103,7 +103,7 @@ Fork the repo on GitHub, branch your feature, and PR. Fix my bugs, add features,
 
 ---
 
-### Contact
-I’m EyuKaz on GitHub. Open issues or PRs for questions. No DMs. let the community build this.
+### note
+Open issues or PRs for questions. No DMs. let the community build this.
 
 That's *Qimem* in all its glory and gory. 
