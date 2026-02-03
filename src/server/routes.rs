@@ -257,11 +257,9 @@ async fn totp_code(
     _user: AuthUser,
     Json(payload): Json<TotpCodeRequest>,
 ) -> Result<Json<TotpCodeResponse>, ApiError> {
-    let secret_bytes = STANDARD
+    let secret = STANDARD
         .decode(payload.secret_b64)
         .map_err(|_| ApiError::InvalidInput("Invalid secret base64"))?;
-    let secret = String::from_utf8(secret_bytes)
-        .map_err(|_| ApiError::InvalidInput("Invalid secret"))?;
     let code = totp::get_totp_code_bytes(&secret).map_err(|_| ApiError::Crypto("TOTP failed"))?;
     Ok(Json(TotpCodeResponse { code }))
 }
@@ -282,12 +280,10 @@ async fn totp_verify(
     _user: AuthUser,
     Json(payload): Json<TotpVerifyRequest>,
 ) -> Result<Json<TotpVerifyResponse>, ApiError> {
-    let secret_bytes = STANDARD
+    let secret = STANDARD
         .decode(payload.secret_b64)
         .map_err(|_| ApiError::InvalidInput("Invalid secret base64"))?;
-    let secret = String::from_utf8(secret_bytes)
-        .map_err(|_| ApiError::InvalidInput("Invalid secret"))?;
-    let valid = totp::verify_totp_code(&secret, &payload.code)
+    let valid = totp::verify_totp_code_bytes(&secret, &payload.code)
         .map_err(|_| ApiError::Crypto("TOTP failed"))?;
     Ok(Json(TotpVerifyResponse { valid }))
 }

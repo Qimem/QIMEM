@@ -41,20 +41,23 @@ pub fn verify_totp_code(secret: &str, code: &str) -> PyResult<bool> {
 pub fn generate_totp_secret_bytes() -> Result<Vec<u8>, &'static str> {
     let mut bytes = [0u8; 20];
     rand::thread_rng().fill_bytes(&mut bytes);
-    let secret = BASE64_STANDARD.encode(bytes);
-    Ok(secret.as_bytes().to_vec())
+    Ok(bytes.to_vec())
 }
 
-pub fn get_totp_code_bytes(secret: &str) -> Result<String, &'static str> {
+pub fn get_totp_code_bytes(secret: &[u8]) -> Result<String, &'static str> {
     let totp = TOTP::new(
         Algorithm::SHA1,
         6,
         1,
         30,
-        BASE64_STANDARD
-            .decode(secret)
-            .map_err(|_| "Invalid secret")?,
+        secret.to_vec(),
     )
     .map_err(|_| "Failed to create TOTP")?;
     totp.generate_current().map_err(|_| "Failed to generate TOTP code")
+}
+
+pub fn verify_totp_code_bytes(secret: &[u8], code: &str) -> Result<bool, &'static str> {
+    let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret.to_vec())
+        .map_err(|_| "Failed to create TOTP")?;
+    totp.check_current(code).map_err(|_| "Failed to verify TOTP code")
 }
