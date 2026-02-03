@@ -6,9 +6,6 @@ use chacha20poly1305::{
 };
 use pyo3::exceptions::PyValueError;
 use rand::RngCore;
-use aes::Aes256;
-use aes::cipher::{BlockEncrypt, BlockDecrypt, KeyInit as AesKeyInit};
-use aes::cipher::generic_array::GenericArray;
 
 #[derive(thiserror::Error, Debug)]
 pub enum QCoreError {
@@ -61,51 +58,32 @@ pub fn decrypt<'py>(py: Python<'py>, encrypted: &[u8], key: &[u8]) -> PyResult<B
 // Simple versions for non-Python use
 pub fn encrypt_simple(message: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     if key.len() != 32 {
-        return Err("Key must be 32 bytes for AES-256".into());
+        return Err("Key must be 32 bytes".into());
     }
 
-    // Simple AES-256-ECB for now (you can enhance this later)
-    let cipher = Aes256::new(GenericArray::from_slice(key));
-    
-    // Pad message to multiple of 16 bytes
-    let mut padded_message = message.to_vec();
-    let padding_len = 16 - (message.len() % 16);
-    padded_message.extend(vec![padding_len as u8; padding_len]);
-    
-    let mut encrypted = Vec::new();
-    for chunk in padded_message.chunks(16) {
-        let mut block = GenericArray::clone_from_slice(chunk);
-        cipher.encrypt_block(&mut block);
-        encrypted.extend_from_slice(&block);
-    }
-    
-    Ok(encrypted)
+    let cipher = ChaCha20Poly1305::new_from_slice(key)?;
+    let mut nonce = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce);
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), message)
+        .map_err(|_| QCoreError::EncryptionFailed)?;
+    let mut output = nonce.to_vec();
+    output.extend_from_slice(&ciphertext);
+    Ok(output)
 }
 
 pub fn decrypt_simple(encrypted: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     if key.len() != 32 {
-        return Err("Key must be 32 bytes for AES-256".into());
+        return Err("Key must be 32 bytes".into());
+    }
+    if encrypted.len() < 12 {
+        return Err("Encrypted data length must be at least 12 bytes".into());
     }
 
-    if encrypted.len() % 16 != 0 {
-        return Err("Encrypted data length must be multiple of 16".into());
-    }
-
-    let cipher = Aes256::new(GenericArray::from_slice(key));
-    
-    let mut decrypted = Vec::new();
-    for chunk in encrypted.chunks(16) {
-        let mut block = GenericArray::clone_from_slice(chunk);
-        cipher.decrypt_block(&mut block);
-        decrypted.extend_from_slice(&block);
-    }
-    
-    // Remove padding
-    if let Some(&padding_len) = decrypted.last() {
-        if padding_len > 0 && padding_len <= 16 {
-            decrypted.truncate(decrypted.len() - padding_len as usize);
-        }
-    }
-    
-    Ok(decrypted)
+    let cipher = ChaCha20Poly1305::new_from_slice(key)?;
+    let (nonce, ciphertext) = encrypted.split_at(12);
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(nonce), ciphertext)
+        .map_err(|_| QCoreError::DecryptionFailed)?;
+    Ok(plaintext)
 }
