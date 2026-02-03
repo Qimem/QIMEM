@@ -36,3 +36,17 @@ pub fn verify_signature<'py>(_py: Python<'py>, public_key: &[u8], message: &[u8]
         .map_err(|_| PyValueError::new_err("Invalid signature"))?;
     Ok(verifying_key.verify(message, &signature).is_ok())
 }
+
+pub fn sign_message_bytes(secret_key: &[u8], message: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let secret_key_array: [u8; 32] = secret_key.try_into().map_err(|_| "Secret key must be 32 bytes")?;
+    let signing_key = SigningKey::from_bytes(&secret_key_array);
+    Ok(signing_key.sign(message).to_bytes().to_vec())
+}
+
+pub fn verify_signature_bytes(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<bool, &'static str> {
+    let public_key_array: [u8; 32] = public_key.try_into().map_err(|_| "Public key must be 32 bytes")?;
+    let signature_array: [u8; 64] = signature.try_into().map_err(|_| "Signature must be 64 bytes")?;
+    let verifying_key = VerifyingKey::from_bytes(&public_key_array).map_err(|_| "Invalid public key")?;
+    let signature = Signature::try_from(signature_array).map_err(|_| "Invalid signature")?;
+    Ok(verifying_key.verify(message, &signature).is_ok())
+}

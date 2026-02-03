@@ -10,7 +10,7 @@ use std::io::Read;
 fn test_encrypt_decrypt_file() {
     init_python();
     Python::with_gil(|py| {
-        let (key, salt) = derive_key(py, "password", None).unwrap();
+        let (key, salt) = derive_key(py, "password", None, None).unwrap();
         let input_path = "test_input.txt";
         let encrypted_path = "test_encrypted.bin";
         let decrypted_path = "test_decrypted.txt";

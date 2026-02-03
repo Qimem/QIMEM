@@ -7,8 +7,8 @@ use pyo3::types::PyBytesMethods;
 fn test_user_salt() {
     init_python();
     Python::with_gil(|py| {
-        let (key1, salt1) = derive_key(py, "password", Some("saltphrase")).unwrap();
-        let (key2, salt2) = derive_key(py, "password", Some("saltphrase")).unwrap();
+        let (key1, salt1) = derive_key(py, "password", Some("saltphrase"), None).unwrap();
+        let (key2, salt2) = derive_key(py, "password", Some("saltphrase"), None).unwrap();
         assert_eq!(key1.as_bytes(), key2.as_bytes());
         assert_eq!(salt1.as_bytes(), salt2.as_bytes());
     });
@@ -18,8 +18,8 @@ fn test_user_salt() {
 fn test_random_salt() {
     init_python();
     Python::with_gil(|py| {
-        let (key1, salt1) = derive_key(py, "password", None).unwrap();
-        let (key2, salt2) = derive_key(py, "password", None).unwrap();
+        let (key1, salt1) = derive_key(py, "password", None, None).unwrap();
+        let (key2, salt2) = derive_key(py, "password", None, None).unwrap();
         assert_ne!(key1.as_bytes(), key2.as_bytes());
         assert_ne!(salt1.as_bytes(), salt2.as_bytes());
     });
@@ -29,8 +29,19 @@ fn test_random_salt() {
 fn test_invalid_salt() {
     init_python();
     Python::with_gil(|py| {
-        let (key1, salt1) = derive_key(py, "password", Some("saltphrase1")).unwrap();
-        let (key2, salt2) = derive_key(py, "password", Some("saltphrase2")).unwrap();
+        let (key1, salt1) = derive_key(py, "password", Some("saltphrase1"), None).unwrap();
+        let (key2, salt2) = derive_key(py, "password", Some("saltphrase2"), None).unwrap();
+        assert_ne!(key1.as_bytes(), key2.as_bytes());
+        assert_ne!(salt1.as_bytes(), salt2.as_bytes());
+    });
+}
+
+#[test]
+fn test_device_fingerprint_changes_key() {
+    init_python();
+    Python::with_gil(|py| {
+        let (key1, salt1) = derive_key(py, "password", Some("saltphrase"), Some("device-a")).unwrap();
+        let (key2, salt2) = derive_key(py, "password", Some("saltphrase"), Some("device-b")).unwrap();
         assert_ne!(key1.as_bytes(), key2.as_bytes());
         assert_ne!(salt1.as_bytes(), salt2.as_bytes());
     });
