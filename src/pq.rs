@@ -1,4 +1,5 @@
 use pqcrypto_kyber::kyber1024;
+use pqcrypto_traits::kem::{Ciphertext, PublicKey, SecretKey, SharedSecret};
 
 pub fn kyber_keypair() -> (Vec<u8>, Vec<u8>) {
     let (public_key, secret_key) = kyber1024::keypair();

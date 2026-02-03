@@ -45,10 +45,9 @@ cargo run --bin qimem-api
 ## Running the Web Console (Vercel‑ready)
 
 ```bash
-cd web
-cp .env.example .env.local
-npm install
-npm run dev
+cp web/.env.example web/.env.local
+npm run web:install
+npm run web:dev
 ```
 
 The UI is a monochrome, military‑grade control panel and expects a Better Auth JWT to be supplied by the operator.

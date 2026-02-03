@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 name = "qimem"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "qimem"
@@ -32,9 +32,10 @@ axum = "0.7"
 tokio = { version = "1.39", features = ["macros", "rt-multi-thread"] }
 tower = "0.5"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
-tower-governor = "0.4"
+tower_governor = "0.4"
 jsonwebtoken = "9.3"
 pqcrypto-kyber = "0.7"
+pqcrypto-traits = "0.3"
 
 [build-dependencies]
 pyo3-build-config = "0.22"

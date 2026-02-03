@@ -2,7 +2,7 @@ use std::env;
 use std::net::SocketAddr;
 
 use axum::middleware;
-use tower_governor::{GovernorConfigBuilder, GovernorLayer};
+use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -31,7 +31,7 @@ async fn main() {
     let app = router(state.clone())
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::new().allow_origin(Any).allow_headers(Any))
-        .layer(GovernorLayer { config: rate_limit })
+        .layer(GovernorLayer { config: rate_limit.into() })
         .layer(middleware::from_fn_with_state(state.policy.clone(), policy_middleware));
 
     let addr: SocketAddr = format!("{}:{}", host, port)

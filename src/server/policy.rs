@@ -1,3 +1,4 @@
+use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
@@ -70,10 +71,10 @@ impl PolicyConfig {
     }
 }
 
-pub async fn policy_middleware<B>(
+pub async fn policy_middleware(
     State(policy): State<PolicyConfig>,
-    request: Request<B>,
-    next: Next<B>,
+    request: Request<Body>,
+    next: Next,
 ) -> impl IntoResponse {
     match policy.enforce(request.headers()) {
         Ok(()) => next.run(request).await,
