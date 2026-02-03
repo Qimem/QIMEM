@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Keep PyO3 for the library part (if you need Python extension)
-pyo3 = { version = "0.22.6", features = ["extension-module", "abi3-py38"] }
+pyo3 = { version = "0.22.6", features = ["abi3-py38"] }
 # Keep all your existing dependencies
 argon2 = "0.5"
 rand = "0.8"
