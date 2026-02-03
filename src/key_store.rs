@@ -7,7 +7,6 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 use bincode;
-use chrono::Utc;
 use pyo3::exceptions::{PyValueError, PyIOError};
 
 #[derive(thiserror::Error, Debug)]
@@ -56,9 +55,7 @@ impl KeyStore {
 
     pub fn store_key(&mut self, py: Python<'_>, id: &str, key: &[u8]) -> PyResult<()> {
         let key_array: [u8; 32] = key.try_into().map_err(|_| PyValueError::new_err("Key must be 32 bytes"))?;
-        let timestamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-        let full_id = format!("{}_{}", id, timestamp);
-        self.keys.insert(full_id, key_array);
+        self.keys.insert(id.to_string(), key_array);
         let serialized_data = bincode::serialize(&self.keys).map_err(|e| PyValueError::new_err(e.to_string()))?;
         let encrypted_bound = encrypt(py, &serialized_data, &self.master_key)?;
         let encrypted_data = encrypted_bound.as_bytes();
