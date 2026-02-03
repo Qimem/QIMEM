@@ -19,3 +19,10 @@ npm run dev
 
 Paste a Better Auth JWT into the control panel to authorize requests. Tokens are
 stored locally in the browser for the session.
+
+## Vercel Deployment
+
+1. Create a new Vercel project and set the **Root Directory** to `web/`.
+2. Configure environment variables:
+   - `NEXT_PUBLIC_API_BASE_URL` pointing to the QIMEM API (HTTPS).
+3. Deploy. The project includes `web/vercel.json` with default build settings.

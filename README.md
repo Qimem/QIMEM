@@ -52,6 +52,12 @@ npm run web:dev
 
 The UI is a monochrome, military‑grade control panel and expects a Better Auth JWT to be supplied by the operator.
 
+### Deploying to Vercel
+
+1. Create a new Vercel project and set the **Root Directory** to `web/`.
+2. Add `NEXT_PUBLIC_API_BASE_URL` in the Vercel environment settings.
+3. Deploy — the project includes `web/vercel.json` with default build commands.
+
 ## API Overview (JSON)
 
 - `POST /v1/derive-key`
