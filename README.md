@@ -1,8 +1,8 @@
 # QIMEM — Secure Cryptography Platform (Private Beta)
 
-QIMEM is a **closed-source cryptography platform** built in Rust with a hardened API and a monochrome, military-grade web console. The platform exposes key derivation, encryption with self-destruct policies, signing, TOTP/MFA, and post‑quantum session establishment for modern zero‑trust environments.
+QIMEM is a **closed-source cryptography platform** built in Rust with a hardened API and, military-grade web console. The platform exposes key derivation, encryption with self-destruct policies, signing, TOTP/MFA, and post‑quantum session establishment for modern zero‑trust environments.
 
-> **Access policy**: QIMEM is no longer open source. Distribution is restricted and governed by private licensing.
+> **Access policy**: QIMEM is open source. However, distribution is restricted and governed by private licensing.
 
 ## What QIMEM Does
 
