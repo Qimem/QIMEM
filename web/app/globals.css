@@ -8,6 +8,16 @@
   --accent: #ffffff;
 }
 
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f6f6;
+  --panel: #ffffff;
+  --border: #d1d1d1;
+  --text: #111111;
+  --muted: #4b4b4b;
+  --accent: #000000;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -108,6 +118,39 @@ button:hover {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 24px;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.tab {
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  background: transparent;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 12px;
+}
+
+.tab.active {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.status {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.button-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
 }
 
 .badge {

@@ -2,7 +2,8 @@
 
 ## Authentication
 
-All API calls require a Better Auth JWT:
+By default the API can run without authentication for local or beta testing by
+setting `QIMEM_AUTH_DISABLED=true`. When auth is enabled, all calls require a JWT:
 
 ```
 Authorization: Bearer <token>

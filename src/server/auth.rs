@@ -14,10 +14,22 @@ pub struct AuthConfig {
     pub jwt_secret: String,
     pub issuer: Option<String>,
     pub audience: Option<String>,
+    pub auth_disabled: bool,
 }
 
 impl AuthConfig {
     pub fn from_env() -> Result<Self, AuthError> {
+        let auth_disabled = env::var("QIMEM_AUTH_DISABLED")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if auth_disabled {
+            return Ok(Self {
+                jwt_secret: String::new(),
+                issuer: None,
+                audience: None,
+                auth_disabled,
+            });
+        }
         let jwt_secret = env::var("BETTER_AUTH_JWT_SECRET")
             .map_err(|_| AuthError::MissingConfig("BETTER_AUTH_JWT_SECRET"))?;
         let issuer = env::var("BETTER_AUTH_ISSUER").ok();
@@ -26,6 +38,7 @@ impl AuthConfig {
             jwt_secret,
             issuer,
             audience,
+            auth_disabled,
         })
     }
 }
@@ -74,6 +87,12 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let auth_config = AuthConfig::from_ref(state);
+        if auth_config.auth_disabled {
+            return Ok(AuthUser {
+                subject: "anonymous".to_string(),
+                scope: None,
+            });
+        }
         let header_value = parts
             .headers
             .get(AUTHORIZATION)

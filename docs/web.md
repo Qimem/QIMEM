@@ -17,8 +17,8 @@ npm run dev
 
 ## Access
 
-Paste a Better Auth JWT into the control panel to authorize requests. Tokens are
-stored locally in the browser for the session.
+All cryptographic operations run locally in the browser. No access token is
+required for the web console.
 
 ## Vercel Deployment
 

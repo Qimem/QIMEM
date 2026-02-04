@@ -37,7 +37,8 @@ cargo run --bin qimem-api
 
 ### Required Environment Variables
 
-- `BETTER_AUTH_JWT_SECRET` — JWT signing secret from Better Auth.
+- `QIMEM_AUTH_DISABLED` — set to `true` for local/beta use without auth.
+- `BETTER_AUTH_JWT_SECRET` — JWT signing secret (only required when auth is enabled).
 - `BETTER_AUTH_ISSUER` / `BETTER_AUTH_AUDIENCE` — JWT validation controls.
 - `QIMEM_ALLOWED_COUNTRIES` — Optional comma‑separated allow‑list.
 - `QIMEM_REQUIRE_MFA` — `true` to require TOTP on every request.
@@ -49,8 +50,6 @@ cp web/.env.example web/.env.local
 npm run web:install
 npm run web:dev
 ```
-
-The UI is a monochrome, military‑grade control panel and expects a Better Auth JWT to be supplied by the operator.
 
 ### Deploying to Vercel
 
