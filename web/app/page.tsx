@@ -824,7 +824,7 @@ export default function Home() {
         <h2>Beta Feedback</h2>
         <p>
           Report issues or request features:{" "}
-          <a href="mailto:ops@qimem.local">ops@qimem.local</a> ·{" "}
+          <a href="mailto:#">I'll set up an email soon. ;)</a> ·{" "}
           <a href="https://github.com/qimem/qimem/issues" target="_blank" rel="noreferrer">
             GitHub Issues
           </a>
