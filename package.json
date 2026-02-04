@@ -1,0 +1,11 @@
+{
+  "name": "qimem-root",
+  "private": true,
+  "workspaces": ["web"],
+  "scripts": {
+    "web:install": "npm install -w web",
+    "web:dev": "npm run -w web dev",
+    "web:build": "npm run -w web build",
+    "web:start": "npm run -w web start"
+  }
+}

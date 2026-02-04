@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let password = password.trim();
 
     // Use your Rust q_keygen module directly
-    let (key_bytes, salt_bytes) = q_keygen::derive_key_simple(password, None)?;
+    let (key_bytes, salt_bytes) = q_keygen::derive_key_simple(password, None, None)?;
     
     // Display first 8 bytes of key and full salt in base64
     let key_preview = general_purpose::STANDARD.encode(&key_bytes[..8.min(key_bytes.len())]);

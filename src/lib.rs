@@ -12,6 +12,8 @@ pub mod utils;
 pub mod totp;
 pub mod obfuscation;
 pub mod bucketing;
+pub mod pq;
+pub mod server;
 
 use key_store::{KeyStore, KeyStoreError};
 use file_encryption::FileEncryptionError;
@@ -50,9 +52,19 @@ fn qimem(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (password, salt_phrase=None))]
-pub fn py_derive_key(py: Python<'_>, password: String, salt_phrase: Option<String>) -> PyResult<(Bound<'_, PyBytes>, Bound<'_, PyBytes>)> {
-    q_keygen::derive_key(py, &password, salt_phrase.as_deref())
+#[pyo3(signature = (password, salt_phrase=None, device_fingerprint=None))]
+pub fn py_derive_key(
+    py: Python<'_>,
+    password: String,
+    salt_phrase: Option<String>,
+    device_fingerprint: Option<String>,
+) -> PyResult<(Bound<'_, PyBytes>, Bound<'_, PyBytes>)> {
+    q_keygen::derive_key(
+        py,
+        &password,
+        salt_phrase.as_deref(),
+        device_fingerprint.as_deref(),
+    )
 }
 
 #[pyfunction]
