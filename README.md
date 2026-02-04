@@ -51,8 +51,6 @@ npm run web:install
 npm run web:dev
 ```
 
-The UI is a monochrome, military‑grade control panel designed for client‑only crypto operations.
-
 ### Deploying to Vercel
 
 1. Create a new Vercel project and set the **Root Directory** to `web/`.

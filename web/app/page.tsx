@@ -544,7 +544,7 @@ export default function Home() {
     <main>
       <header>
         <div>
-          <h1>QIMEM COMMAND</h1>
+          <h1>QIMEM ቅመም - COMMAND</h1>
           <p>Local-first cryptography control room built for calm, focused operations.</p>
         </div>
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
