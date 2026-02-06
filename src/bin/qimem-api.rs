@@ -6,7 +6,7 @@ use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
-use qimem::server::{policy_middleware, router, AppState, AuthConfig, PolicyConfig};
+use qimem::server::{policy_middleware, router, AppState, AuthConfig, KmsService, PolicyConfig};
 
 #[tokio::main]
 async fn main() {
@@ -18,8 +18,11 @@ async fn main() {
 
     let auth = AuthConfig::from_env().expect("Missing Better Auth configuration");
     let policy = PolicyConfig::from_env();
+    let kms = KmsService::from_env()
+        .await
+        .expect("Missing KMS configuration");
 
-    let state = AppState { auth, policy };
+    let state = AppState { auth, policy, kms };
 
     let rate_limit = GovernorConfigBuilder::default()
         .burst_size(60)

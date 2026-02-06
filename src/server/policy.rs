@@ -88,6 +88,8 @@ pub enum PolicyError {
     MissingGeo,
     #[error("request blocked by geofence policy")]
     ForbiddenGeo,
+    #[error("missing required scope")]
+    Forbidden,
     #[error("missing MFA code")]
     MissingMfa,
     #[error("missing MFA secret")]
