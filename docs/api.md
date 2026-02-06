@@ -1,105 +1,123 @@
-# QIMEM API (Private)
+# QIMEM KMS API Specification
 
-## Authentication
+## Authentication & Authorization
+- JWT required for all endpoints.
+- Claims: `tenant_id`, `scope`, `exp`.
+- Scopes: `kms:wrap`, `kms:unwrap`, `kms:tenant:admin`, `gateway:invoke`, `vault:read`, `vault:write`.
 
-By default the API can run without authentication for local or beta testing by
-setting `QIMEM_AUTH_DISABLED=true`. When auth is enabled, all calls require a JWT:
+## Core Endpoints
 
+### POST /v1/tenants
+Provision a new tenant.
+
+**Request**
+```json
+{ "tenant_name": "acme" }
 ```
-Authorization: Bearer <token>
+
+**Response**
+```json
+{ "tenant_id": "t_123", "key_version": 1 }
 ```
 
-The API validates the JWT signature using `BETTER_AUTH_JWT_SECRET`. Optionally set
-`BETTER_AUTH_ISSUER` and `BETTER_AUTH_AUDIENCE` to enforce issuer/audience.
+### GET /v1/tenants/{tenant_id}
+Returns tenant metadata and active key version.
 
-## Policy Controls
+### POST /v1/keys/wrap
+Wrap a DEK using the tenant master key.
 
-- **Geofencing**: Set `QIMEM_ALLOWED_COUNTRIES=US,GB` to restrict access.
-- **MFA**: Set `QIMEM_REQUIRE_MFA=true` and `QIMEM_MFA_TOTP_SECRET=<base64>`.
-
-## Endpoints
-
-### POST /v1/derive-key
-
+**Request**
 ```json
 {
-  "password": "...",
-  "salt_phrase": "optional",
-  "device_fingerprint": "optional"
+  "tenant_id": "t_123",
+  "dek_b64": "...",
+  "algorithm": "chacha20poly1305",
+  "key_version": 1
 }
 ```
 
-### POST /v1/encrypt
-
+**Response**
 ```json
 {
-  "plaintext_b64": "...",
-  "key_b64": "...",
-  "expires_in_seconds": 3600
+  "wrapped_dek_b64": "...",
+  "key_version": 1,
+  "algorithms": {
+    "kem": "x25519+kyber1024",
+    "kdf": "hkdf-sha256",
+    "aead": "chacha20poly1305"
+  }
 }
 ```
 
-### POST /v1/decrypt
+### POST /v1/keys/unwrap
+Unwrap a DEK for authorized requests.
 
+**Request**
 ```json
 {
+  "tenant_id": "t_123",
+  "wrapped_dek_b64": "...",
+  "key_version": 1
+}
+```
+
+### POST /v1/keys/rotate
+Rotate a tenant master key.
+
+**Request**
+```json
+{ "tenant_id": "t_123" }
+```
+
+### POST /v1/policies
+Update tenant crypto policies.
+
+**Request**
+```json
+{
+  "tenant_id": "t_123",
+  "crypto_policy": {
+    "kem": ["x25519", "kyber1024"],
+    "aead": "chacha20poly1305",
+    "deterministic_encryption": false
+  }
+}
+```
+
+## Secure AI Gateway Endpoints
+
+### POST /v1/gateway/token
+Issue a short-lived gateway token.
+
+**Request**
+```json
+{ "tenant_id": "t_123", "ttl_seconds": 60 }
+```
+
+### POST /v1/gateway/invoke
+Send encrypted prompt + wrapped DEK.
+
+**Request**
+```json
+{
+  "tenant_id": "t_123",
+  "wrapped_dek_b64": "...",
   "ciphertext_b64": "...",
-  "key_b64": "..."
+  "provider": "openai",
+  "request_sig": "...",
+  "nonce": "..."
 }
 ```
 
-### POST /v1/sign
+## Vault Endpoints
 
-```json
-{
-  "message_b64": "...",
-  "secret_key_b64": "..."
-}
-```
+### POST /v1/vault/secret
+Store encrypted API key material.
 
-### POST /v1/verify
+### GET /v1/vault/secret/{secret_id}
+Retrieve encrypted API key material (never plaintext).
 
-```json
-{
-  "message_b64": "...",
-  "public_key_b64": "...",
-  "signature_b64": "..."
-}
-```
+## Audit Log Endpoints
 
-### POST /v1/totp/secret
-
-Returns a base64 TOTP secret.
-
-### POST /v1/totp/code
-
-```json
-{
-  "secret_b64": "..."
-}
-```
-
-### POST /v1/totp/verify
-
-```json
-{
-  "secret_b64": "...",
-  "code": "123456"
-}
-```
-
-### POST /v1/pq/keypair
-
-Returns Kyber1024 public/secret keys.
-
-### POST /v1/pq/encapsulate
-
-```json
-{ "public_key_b64": "..." }
-```
-
-### POST /v1/pq/decapsulate
-
-```json
-{ "secret_key_b64": "...", "ciphertext_b64": "..." }
-```
+### GET /v1/audit
+Returns hash-chained audit events filtered by tenant.

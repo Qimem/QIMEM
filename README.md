@@ -1,32 +1,54 @@
-# QIMEM: Secure Cryptography Platform (Private Beta)
+# QIMEM: End-to-End Encryption Infrastructure for AI Startups
 
-QIMEM is a **closed-source cryptography platform** built in Rust with a hardened API and, military-grade web console. The platform exposes key derivation, encryption with self-destruct policies, signing, TOTP/MFA, and post‑quantum session establishment for modern zero‑trust environments.
+QIMEM is a production-grade encryption platform that provides a **drop-in, end-to-end encryption layer** for AI startups handling sensitive data. It delivers per-tenant key isolation, envelope encryption, post-quantum readiness, secure prompt processing, and encrypted secret storage.
 
-> **Access policy**: QIMEM is open source. However, distribution is restricted and governed by private licensing.
+## Core Mission
 
-## What QIMEM Does
+- **Encrypt before AI**: User data is encrypted client-side before reaching AI providers.
+- **Per-tenant isolation**: Keys are unique and isolated per tenant.
+- **Zero persistent plaintext**: Servers never store plaintext keys or data.
+- **Post-quantum readiness**: Hybrid key exchange (X25519 + Kyber1024).
+- **Operational security**: Audit logs and policy controls built-in.
 
-- **Zero‑trust access**: Every API request is authenticated and policy‑gated.
-- **Hardware‑bound key derivation**: Device fingerprints can be used to bind keys to hardware.
-- **Self‑destruct encryption**: Payloads can be encrypted with expiration timestamps.
-- **Post‑quantum sessions**: Kyber1024 key encapsulation for forward‑secure session bootstrapping.
-- **Signing & verification**: Ed25519 signing for integrity and identity.
-- **MFA (TOTP)**: Built‑in second‑factor secrets and verification.
-- **Geofencing**: Optional country allow‑lists using edge‑provided headers.
-- **Rate limiting**: Enforced at the API layer.
+## System Architecture
+
+QIMEM is a 3-layer system:
+
+1. **Client SDKs** (JS + Python)
+   - Encrypt locally, wrap keys, and invoke the gateway.
+2. **QIMEM KMS** (Core Service)
+   - Tenant provisioning, key lifecycle, policy enforcement, audit logs.
+3. **Secure AI Gateway**
+   - Decrypts in volatile memory only and forwards to AI providers.
+
+Detailed specs are in `docs/`:
+- Architecture: `docs/architecture.md`
+- Threat model: `docs/threat_model.md`
+- Tenant isolation: `docs/tenant_isolation.md`
+- Cryptographic lifecycle: `docs/cryptographic_lifecycle.md`
+- Key rotation: `docs/key_rotation_plan.md`
+- API spec: `docs/api.md`
+- SDK interface: `docs/sdk_interface.md`
+- Audit schema: `docs/audit_log_schema.md`
+- Deployment: `docs/deployment_model.md`
+- Scaling: `docs/scaling_considerations.md`
+- Security assumptions: `docs/security_assumptions.md`
+- Vector DB model: `docs/vector_encryption_model.md`
+- API key vault: `docs/api_key_vault.md`
+- Post-quantum strategy: `docs/post_quantum_strategy.md`
 
 ## Repository Layout
 
 ```
 qimem/
 ├─ src/                # Rust core, API server, crypto modules
-├─ web/                # Next.js web console (Vercel‑ready)
+├─ web/                # Web console
 ├─ python/             # Python tests (CLI bindings)
-├─ docs/               # Extended references
+├─ docs/               # Architecture and security specs
 └─ .env.example        # API configuration template
 ```
 
-## Running the API
+## Running the API (Development)
 
 1. Copy and configure `.env.example`.
 2. Run the API server:
@@ -35,51 +57,23 @@ qimem/
 cargo run --bin qimem-api
 ```
 
-### Required Environment Variables
+### Environment Variables
 
-- `QIMEM_AUTH_DISABLED` — set to `true` for local/beta use without auth.
-- `BETTER_AUTH_JWT_SECRET` — JWT signing secret (only required when auth is enabled).
+- `QIMEM_AUTH_DISABLED` — set to `true` for local development.
+- `BETTER_AUTH_JWT_SECRET` — JWT signing secret.
 - `BETTER_AUTH_ISSUER` / `BETTER_AUTH_AUDIENCE` — JWT validation controls.
-- `QIMEM_ALLOWED_COUNTRIES` — Optional comma‑separated allow‑list.
-- `QIMEM_REQUIRE_MFA` — `true` to require TOTP on every request.
+- `QIMEM_ALLOWED_COUNTRIES` — Optional allow-list.
+- `QIMEM_REQUIRE_MFA` — Require MFA on requests.
 
-## Running the Web Console (Vercel‑ready)
+## Web Console
+
+The web console is a **Security Control Plane** for tenant management, key lifecycle, policy configuration, and audit inspection.
 
 ```bash
 cp web/.env.example web/.env.local
 npm run web:install
 npm run web:dev
 ```
-
-### Deploying to Vercel
-
-1. Create a new Vercel project and set the **Root Directory** to `web/`.
-2. Add `NEXT_PUBLIC_API_BASE_URL` in the Vercel environment settings.
-3. Deploy — the project includes `web/vercel.json` with default build commands.
-
-## API Overview (JSON)
-
-- `POST /v1/derive-key`
-- `POST /v1/encrypt`
-- `POST /v1/decrypt`
-- `POST /v1/sign`
-- `POST /v1/verify`
-- `POST /v1/totp/secret`
-- `POST /v1/totp/code`
-- `POST /v1/totp/verify`
-- `POST /v1/pq/keypair`
-- `POST /v1/pq/encapsulate`
-- `POST /v1/pq/decapsulate`
-
-All endpoints require `Authorization: Bearer <token>`.
-
-## Security Notes
-
-- **Key derivation** uses Argon2id with strict parameters.
-- **Symmetric encryption** uses ChaCha20‑Poly1305 with random nonces.
-- **Post‑quantum** sessions use Kyber1024 (encapsulation/decapsulation).
-- **Self‑destruct** payloads are enforced at decrypt‑time with embedded expiry.
-- **Policy enforcement** can reject requests by country or missing MFA.
 
 ## License
 

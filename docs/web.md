@@ -1,6 +1,6 @@
 # QIMEM Web Console
 
-The web console is a monochrome, minimal command interface designed for secure operations.
+The web console is a **Security Control Plane** for tenant and key management, policy configuration, audit inspection, and vault administration.
 
 ## Local Setup
 
@@ -17,8 +17,8 @@ npm run dev
 
 ## Access
 
-All cryptographic operations run locally in the browser. No access token is
-required for the web console.
+- The console requires authenticated access with tenant-scoped JWTs.
+- No cryptographic demo operations are exposed in the UI.
 
 ## Vercel Deployment
 
