@@ -1,24 +1,28 @@
 use axum::extract::{FromRef, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
+use zeroize::Zeroize;
 
 use crate::q_core;
 use crate::q_keygen;
 use crate::signing;
-use crate::totp;
 use crate::pq;
 
 use super::auth::{AuthConfig, AuthError, AuthUser};
+use super::kms::{append_audit_log, current_timestamp, unwrap_key, wrap_key, KmsError, KmsState, PqKeyRecord, TenantRecord};
 use super::policy::{PolicyConfig, PolicyError};
 
 #[derive(Clone, Debug)]
 pub struct AppState {
     pub auth: AuthConfig,
     pub policy: PolicyConfig,
+    pub kms: KmsState,
 }
 
 impl FromRef<AppState> for AuthConfig {
@@ -33,20 +37,29 @@ impl FromRef<AppState> for PolicyConfig {
     }
 }
 
+impl FromRef<AppState> for KmsState {
+    fn from_ref(input: &AppState) -> Self {
+        input.kms.clone()
+    }
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", axum::routing::get(health))
-        .route("/v1/derive-key", axum::routing::post(derive_key))
-        .route("/v1/encrypt", axum::routing::post(encrypt))
-        .route("/v1/decrypt", axum::routing::post(decrypt))
-        .route("/v1/sign", axum::routing::post(sign))
-        .route("/v1/verify", axum::routing::post(verify))
-        .route("/v1/totp/secret", axum::routing::post(totp_secret))
-        .route("/v1/totp/code", axum::routing::post(totp_code))
-        .route("/v1/totp/verify", axum::routing::post(totp_verify))
-        .route("/v1/pq/keypair", axum::routing::post(pq_keypair))
-        .route("/v1/pq/encapsulate", axum::routing::post(pq_encapsulate))
-        .route("/v1/pq/decapsulate", axum::routing::post(pq_decapsulate))
+        .route("/v0/derive-key", axum::routing::post(derive_key))
+        .route("/v0/encrypt", axum::routing::post(encrypt))
+        .route("/v0/decrypt", axum::routing::post(decrypt))
+        .route("/v0/sign", axum::routing::post(sign))
+        .route("/v0/verify", axum::routing::post(verify))
+        .route("/v1/kms/tenants", axum::routing::post(create_tenant))
+        .route("/v1/kms/encrypt", axum::routing::post(kms_encrypt))
+        .route("/v1/kms/decrypt", axum::routing::post(kms_decrypt))
+        .route(
+            "/v1/kms/rotate-master-key",
+            axum::routing::post(rotate_master_key),
+        )
+        .route("/v1/kms/pq/keypair", axum::routing::post(kms_pq_keypair))
+        .route("/v1/kms/pq/session", axum::routing::post(kms_pq_session))
         .with_state(state)
 }
 
@@ -227,137 +240,257 @@ async fn verify(
     Ok(Json(VerifyResponse { valid }))
 }
 
-#[derive(Serialize)]
-struct TotpSecretResponse {
-    secret_b64: String,
+#[derive(Deserialize)]
+struct CreateTenantRequest {
+    name: String,
 }
 
-async fn totp_secret(
-    State(_state): State<AppState>,
-    _user: AuthUser,
-) -> Result<Json<TotpSecretResponse>, ApiError> {
-    let secret = totp::generate_totp_secret_bytes().map_err(|_| ApiError::Crypto("TOTP failed"))?;
-    Ok(Json(TotpSecretResponse {
-        secret_b64: STANDARD.encode(secret),
+#[derive(Serialize)]
+struct CreateTenantResponse {
+    tenant_id: String,
+    name: String,
+    key_version: u32,
+    crypto_policy_version: u32,
+    created_at: u64,
+}
+
+async fn create_tenant(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(payload): Json<CreateTenantRequest>,
+) -> Result<Json<CreateTenantResponse>, ApiError> {
+    require_scope(&user, "tenants:write")?;
+    let tenant = state
+        .kms
+        .create_tenant(payload.name)
+        .map_err(|_| ApiError::Crypto("Tenant creation failed"))?;
+    Ok(Json(CreateTenantResponse {
+        tenant_id: tenant.id.to_string(),
+        name: tenant.name,
+        key_version: tenant.key_version,
+        crypto_policy_version: tenant.crypto_policy_version,
+        created_at: tenant.created_at,
     }))
 }
 
 #[derive(Deserialize)]
-struct TotpCodeRequest {
-    secret_b64: String,
+struct KmsEncryptRequest {
+    plaintext_b64: String,
 }
 
 #[derive(Serialize)]
-struct TotpCodeResponse {
-    code: String,
+struct KmsEncryptResponse {
+    ciphertext_b64: String,
+    wrapped_dek_b64: String,
+    key_version: u32,
 }
 
-async fn totp_code(
-    State(_state): State<AppState>,
-    _user: AuthUser,
-    Json(payload): Json<TotpCodeRequest>,
-) -> Result<Json<TotpCodeResponse>, ApiError> {
-    let secret = STANDARD
-        .decode(payload.secret_b64)
-        .map_err(|_| ApiError::InvalidInput("Invalid secret base64"))?;
-    let code = totp::get_totp_code_bytes(&secret).map_err(|_| ApiError::Crypto("TOTP failed"))?;
-    Ok(Json(TotpCodeResponse { code }))
+async fn kms_encrypt(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Json(payload): Json<KmsEncryptRequest>,
+) -> Result<Json<KmsEncryptResponse>, ApiError> {
+    require_scope(&user, "kms:encrypt")?;
+    let tenant_id = extract_tenant_id(&headers, &user)?;
+    let mut tenant = state.kms.get_tenant(tenant_id)?;
+    let wrapped_master_key = tenant
+        .wrapped_master_keys
+        .get(&tenant.key_version)
+        .ok_or(ApiError::InvalidInput("Missing master key"))?
+        .clone();
+    let mut master_key = unwrap_key(&wrapped_master_key, state.kms.root_key().expose())
+        .map_err(|_| ApiError::Crypto("Master key unwrap failed"))?;
+    let mut dek = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut dek);
+    let plaintext = STANDARD
+        .decode(payload.plaintext_b64)
+        .map_err(|_| ApiError::InvalidInput("Invalid plaintext base64"))?;
+    let ciphertext = q_core::encrypt_simple(&plaintext, &dek)
+        .map_err(|_| ApiError::Crypto("Encryption failed"))?;
+    let wrapped_dek = wrap_key(&dek, &master_key)
+        .map_err(|_| ApiError::Crypto("DEK wrap failed"))?;
+    let key_version = tenant.key_version;
+    append_audit_log(
+        &mut tenant,
+        "encrypt",
+        serde_json::json!({ "key_version": key_version }),
+    );
+    state.kms.update_tenant(tenant)?;
+    dek.zeroize();
+    master_key.zeroize();
+    Ok(Json(KmsEncryptResponse {
+        ciphertext_b64: STANDARD.encode(ciphertext),
+        wrapped_dek_b64: STANDARD.encode(wrapped_dek),
+        key_version,
+    }))
 }
 
 #[derive(Deserialize)]
-struct TotpVerifyRequest {
-    secret_b64: String,
-    code: String,
+struct KmsDecryptRequest {
+    ciphertext_b64: String,
+    wrapped_dek_b64: String,
+    key_version: u32,
 }
 
 #[derive(Serialize)]
-struct TotpVerifyResponse {
-    valid: bool,
+struct KmsDecryptResponse {
+    plaintext_b64: String,
 }
 
-async fn totp_verify(
-    State(_state): State<AppState>,
-    _user: AuthUser,
-    Json(payload): Json<TotpVerifyRequest>,
-) -> Result<Json<TotpVerifyResponse>, ApiError> {
-    let secret = STANDARD
-        .decode(payload.secret_b64)
-        .map_err(|_| ApiError::InvalidInput("Invalid secret base64"))?;
-    let valid = totp::verify_totp_code_bytes(&secret, &payload.code)
-        .map_err(|_| ApiError::Crypto("TOTP failed"))?;
-    Ok(Json(TotpVerifyResponse { valid }))
+async fn kms_decrypt(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Json(payload): Json<KmsDecryptRequest>,
+) -> Result<Json<KmsDecryptResponse>, ApiError> {
+    require_scope(&user, "kms:decrypt")?;
+    let tenant_id = extract_tenant_id(&headers, &user)?;
+    let mut tenant = state.kms.get_tenant(tenant_id)?;
+    let wrapped_master_key = tenant
+        .wrapped_master_keys
+        .get(&payload.key_version)
+        .ok_or(ApiError::InvalidInput("Unknown key version"))?
+        .clone();
+    let mut master_key = unwrap_key(&wrapped_master_key, state.kms.root_key().expose())
+        .map_err(|_| ApiError::Crypto("Master key unwrap failed"))?;
+    let wrapped_dek = STANDARD
+        .decode(payload.wrapped_dek_b64)
+        .map_err(|_| ApiError::InvalidInput("Invalid wrapped DEK base64"))?;
+    let mut dek = unwrap_key(&wrapped_dek, &master_key)
+        .map_err(|_| ApiError::Crypto("DEK unwrap failed"))?;
+    let ciphertext = STANDARD
+        .decode(payload.ciphertext_b64)
+        .map_err(|_| ApiError::InvalidInput("Invalid ciphertext base64"))?;
+    let plaintext = q_core::decrypt_simple(&ciphertext, &dek)
+        .map_err(|_| ApiError::Crypto("Decryption failed"))?;
+    dek.zeroize();
+    master_key.zeroize();
+    append_audit_log(
+        &mut tenant,
+        "decrypt",
+        serde_json::json!({ "key_version": payload.key_version }),
+    );
+    state.kms.update_tenant(tenant)?;
+    Ok(Json(KmsDecryptResponse {
+        plaintext_b64: STANDARD.encode(plaintext),
+    }))
+}
+
+#[derive(Serialize)]
+struct RotateMasterKeyResponse {
+    key_version: u32,
+    rotated_at: u64,
+}
+
+async fn rotate_master_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    user: AuthUser,
+) -> Result<Json<RotateMasterKeyResponse>, ApiError> {
+    require_scope(&user, "kms:rotate")?;
+    let tenant_id = extract_tenant_id(&headers, &user)?;
+    let mut tenant = state.kms.rotate_master_key(tenant_id)?;
+    let key_version = tenant.key_version;
+    append_audit_log(
+        &mut tenant,
+        "rotate_master_key",
+        serde_json::json!({ "key_version": key_version }),
+    );
+    state.kms.update_tenant(tenant.clone())?;
+    Ok(Json(RotateMasterKeyResponse {
+        key_version,
+        rotated_at: tenant.updated_at,
+    }))
+}
+
+#[derive(Deserialize)]
+struct PqKeypairRequest {
+    algorithm: Option<String>,
 }
 
 #[derive(Serialize)]
 struct PqKeypairResponse {
+    algorithm: String,
+    version: u32,
     public_key_b64: String,
-    secret_key_b64: String,
 }
 
-async fn pq_keypair(
-    State(_state): State<AppState>,
-    _user: AuthUser,
+async fn kms_pq_keypair(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Json(payload): Json<PqKeypairRequest>,
 ) -> Result<Json<PqKeypairResponse>, ApiError> {
-    let (public_key, secret_key) = pq::kyber_keypair();
+    require_scope(&user, "kms:pq:write")?;
+    let tenant_id = extract_tenant_id(&headers, &user)?;
+    let mut tenant = state.kms.get_tenant(tenant_id)?;
+    let algorithm = pq::PqAlgorithm::from_name(payload.algorithm.as_deref())
+        .map_err(|_| ApiError::InvalidInput("Unsupported PQ algorithm"))?;
+    let keypair = pq::keypair(algorithm);
+    let mut master_key = unwrap_master_key(&tenant, &state)?;
+    let wrapped_private_key = wrap_key(&keypair.secret_key, &master_key)?;
+    master_key.zeroize();
+    let version = tenant.pq_keys.len() as u32 + 1;
+    tenant.pq_keys.push(PqKeyRecord {
+        version,
+        algorithm: keypair.algorithm.to_string(),
+        public_key: keypair.public_key.clone(),
+        wrapped_private_key,
+        created_at: current_timestamp(),
+    });
+    append_audit_log(
+        &mut tenant,
+        "pq_keypair",
+        serde_json::json!({ "version": version, "algorithm": keypair.algorithm.to_string() }),
+    );
+    state.kms.update_tenant(tenant)?;
     Ok(Json(PqKeypairResponse {
-        public_key_b64: STANDARD.encode(public_key),
-        secret_key_b64: STANDARD.encode(secret_key),
+        algorithm: keypair.algorithm.to_string(),
+        version,
+        public_key_b64: STANDARD.encode(keypair.public_key),
     }))
 }
 
 #[derive(Deserialize)]
-struct PqEncapsulateRequest {
-    public_key_b64: String,
+struct PqSessionRequest {
+    algorithm: Option<String>,
+    client_x25519_public_key_b64: String,
+    client_kyber_public_key_b64: String,
 }
 
 #[derive(Serialize)]
-struct PqEncapsulateResponse {
-    ciphertext_b64: String,
-    shared_secret_b64: String,
+struct PqSessionResponse {
+    algorithm: String,
+    server_x25519_public_key_b64: String,
+    kyber_ciphertext_b64: String,
+    session_key_b64: String,
 }
 
-async fn pq_encapsulate(
+async fn kms_pq_session(
     State(_state): State<AppState>,
-    _user: AuthUser,
-    Json(payload): Json<PqEncapsulateRequest>,
-) -> Result<Json<PqEncapsulateResponse>, ApiError> {
-    let public_key = STANDARD
-        .decode(payload.public_key_b64)
-        .map_err(|_| ApiError::InvalidInput("Invalid public key base64"))?;
-    let (ciphertext, shared_secret) = pq::kyber_encapsulate(&public_key)
-        .map_err(|_| ApiError::Crypto("Encapsulation failed"))?;
-    Ok(Json(PqEncapsulateResponse {
-        ciphertext_b64: STANDARD.encode(ciphertext),
-        shared_secret_b64: STANDARD.encode(shared_secret),
-    }))
-}
-
-#[derive(Deserialize)]
-struct PqDecapsulateRequest {
-    secret_key_b64: String,
-    ciphertext_b64: String,
-}
-
-#[derive(Serialize)]
-struct PqDecapsulateResponse {
-    shared_secret_b64: String,
-}
-
-async fn pq_decapsulate(
-    State(_state): State<AppState>,
-    _user: AuthUser,
-    Json(payload): Json<PqDecapsulateRequest>,
-) -> Result<Json<PqDecapsulateResponse>, ApiError> {
-    let secret_key = STANDARD
-        .decode(payload.secret_key_b64)
-        .map_err(|_| ApiError::InvalidInput("Invalid secret key base64"))?;
-    let ciphertext = STANDARD
-        .decode(payload.ciphertext_b64)
-        .map_err(|_| ApiError::InvalidInput("Invalid ciphertext base64"))?;
-    let shared_secret = pq::kyber_decapsulate(&secret_key, &ciphertext)
-        .map_err(|_| ApiError::Crypto("Decapsulation failed"))?;
-    Ok(Json(PqDecapsulateResponse {
-        shared_secret_b64: STANDARD.encode(shared_secret),
+    headers: HeaderMap,
+    user: AuthUser,
+    Json(payload): Json<PqSessionRequest>,
+) -> Result<Json<PqSessionResponse>, ApiError> {
+    require_scope(&user, "kms:pq:session")?;
+    extract_tenant_id(&headers, &user)?;
+    let algorithm = pq::PqAlgorithm::from_name(payload.algorithm.as_deref())
+        .map_err(|_| ApiError::InvalidInput("Unsupported PQ algorithm"))?;
+    let client_x25519_public = STANDARD
+        .decode(payload.client_x25519_public_key_b64)
+        .map_err(|_| ApiError::InvalidInput("Invalid X25519 public key base64"))?;
+    let client_kyber_public = STANDARD
+        .decode(payload.client_kyber_public_key_b64)
+        .map_err(|_| ApiError::InvalidInput("Invalid Kyber public key base64"))?;
+    let (server_public, session_key, ciphertext) =
+        pq::hybrid_session(algorithm, &client_x25519_public, &client_kyber_public)
+            .map_err(|_| ApiError::Crypto("Hybrid session failed"))?;
+    Ok(Json(PqSessionResponse {
+        algorithm: algorithm.to_string(),
+        server_x25519_public_key_b64: STANDARD.encode(server_public),
+        kyber_ciphertext_b64: STANDARD.encode(ciphertext),
+        session_key_b64: STANDARD.encode(session_key),
     }))
 }
 
@@ -393,6 +526,7 @@ pub enum ApiError {
     KeyGen(String),
     Auth(AuthError),
     Policy(PolicyError),
+    Kms(KmsError),
     Expired,
 }
 
@@ -404,6 +538,11 @@ impl IntoResponse for ApiError {
             ApiError::KeyGen(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Key derivation failed"),
             ApiError::Auth(_) => (StatusCode::UNAUTHORIZED, "Unauthorized"),
             ApiError::Policy(_) => (StatusCode::FORBIDDEN, "Request blocked by policy"),
+            ApiError::Kms(err) => match err {
+                KmsError::TenantNotFound => (StatusCode::NOT_FOUND, "Tenant not found"),
+                KmsError::KeyVersionNotFound => (StatusCode::NOT_FOUND, "Key version not found"),
+                _ => (StatusCode::INTERNAL_SERVER_ERROR, "KMS error"),
+            },
             ApiError::Expired => (StatusCode::GONE, "Ciphertext expired"),
         };
         (status, Json(serde_json::json!({"error": message}))).into_response()
@@ -420,4 +559,43 @@ impl From<PolicyError> for ApiError {
     fn from(err: PolicyError) -> Self {
         ApiError::Policy(err)
     }
+}
+
+impl From<KmsError> for ApiError {
+    fn from(err: KmsError) -> Self {
+        ApiError::Kms(err)
+    }
+}
+
+fn extract_tenant_id(headers: &HeaderMap, user: &AuthUser) -> Result<Uuid, ApiError> {
+    let header_value = headers
+        .get("x-tenant-id")
+        .ok_or(ApiError::Auth(AuthError::MissingAuthorization))?
+        .to_str()
+        .map_err(|_| ApiError::InvalidInput("Invalid tenant header"))?;
+    let tenant_id = Uuid::parse_str(header_value)
+        .map_err(|_| ApiError::InvalidInput("Invalid tenant id"))?;
+    if let Some(user_tenant) = &user.tenant_id {
+        if user_tenant != header_value {
+            return Err(ApiError::Auth(AuthError::InvalidToken));
+        }
+    }
+    Ok(tenant_id)
+}
+
+fn require_scope(user: &AuthUser, scope: &str) -> Result<(), ApiError> {
+    if user.scopes.iter().any(|value| value == scope) {
+        Ok(())
+    } else {
+        Err(ApiError::Policy(PolicyError::Forbidden))
+    }
+}
+
+fn unwrap_master_key(tenant: &TenantRecord, state: &AppState) -> Result<Vec<u8>, ApiError> {
+    let wrapped_master_key = tenant
+        .wrapped_master_keys
+        .get(&tenant.key_version)
+        .ok_or(ApiError::InvalidInput("Missing master key"))?;
+    unwrap_key(wrapped_master_key, state.kms.root_key().expose())
+        .map_err(|_| ApiError::Crypto("Master key unwrap failed"))
 }
