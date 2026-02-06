@@ -354,6 +354,9 @@ export default function Home() {
     } catch (error) {
       setAuditError(normalizeError(error));
     }
+    const result = await gatewayResponse.json();
+    setGatewayResponse(JSON.stringify(result, null, 2));
+    setAuditLog("decrypt • hash chain advanced");
   };
 
   const clearSensitive = () => {
