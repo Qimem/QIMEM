@@ -134,6 +134,10 @@ where
             }
         }
 
+        if decoded.claims.tenant_id.is_none() {
+            return Err(AuthError::InvalidToken);
+        }
+
         Ok(AuthUser {
             subject: decoded.claims.sub,
             tenant_id: decoded.claims.tenant_id,

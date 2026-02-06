@@ -1,14 +1,10 @@
-use std::collections::HashMap;
-use std::env;
-use std::sync::{Arc, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rand::RngCore;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::env;
+use zeroize::ZeroizeOnDrop;
+
 use uuid::Uuid;
-use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::q_core;
 
@@ -31,6 +27,12 @@ pub struct RootKey {
     bytes: [u8; 32],
 }
 
+impl std::fmt::Debug for RootKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RootKey").field("bytes", &"<redacted>").finish()
+    }
+}
+
 impl RootKey {
     pub fn from_env() -> Result<Self, KmsError> {
         let value = env::var("QIMEM_ROOT_KEY_B64").map_err(|_| KmsError::MissingRootKey)?;
@@ -50,118 +52,34 @@ impl RootKey {
     }
 }
 
-#[derive(Clone)]
-pub struct KmsState {
-    root_key: Arc<RootKey>,
-    tenants: Arc<RwLock<HashMap<Uuid, TenantRecord>>>,
-}
-
-impl std::fmt::Debug for KmsState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KmsState")
-            .field("tenants", &"<redacted>")
-            .finish()
-    }
-}
-
-impl KmsState {
-    pub fn from_env() -> Result<Self, KmsError> {
-        Ok(Self {
-            root_key: Arc::new(RootKey::from_env()?),
-            tenants: Arc::new(RwLock::new(HashMap::new())),
-        })
-    }
-
-    pub fn root_key(&self) -> Arc<RootKey> {
-        self.root_key.clone()
-    }
-
-    pub fn create_tenant(&self, name: String) -> Result<TenantRecord, KmsError> {
-        let tenant_id = Uuid::new_v4();
-        let mut master_key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut master_key);
-        let wrapped_master_key =
-            wrap_key(&master_key, self.root_key.expose()).map_err(|_| KmsError::CryptoError)?;
-        master_key.zeroize();
-        let now = current_timestamp();
-        let record = TenantRecord {
-            id: tenant_id,
-            name,
-            wrapped_master_keys: HashMap::from([(1, wrapped_master_key)]),
-            key_version: 1,
-            crypto_policy_version: 1,
-            pq_keys: Vec::new(),
-            audit_logs: Vec::new(),
-            created_at: now,
-            updated_at: now,
-        };
-        let mut tenants = self.tenants.write().expect("tenant lock poisoned");
-        tenants.insert(tenant_id, record.clone());
-        Ok(record)
-    }
-
-    pub fn get_tenant(&self, tenant_id: Uuid) -> Result<TenantRecord, KmsError> {
-        let tenants = self.tenants.read().expect("tenant lock poisoned");
-        tenants
-            .get(&tenant_id)
-            .cloned()
-            .ok_or(KmsError::TenantNotFound)
-    }
-
-    pub fn update_tenant(&self, tenant: TenantRecord) -> Result<(), KmsError> {
-        let mut tenants = self.tenants.write().expect("tenant lock poisoned");
-        tenants.insert(tenant.id, tenant);
-        Ok(())
-    }
-
-    pub fn rotate_master_key(&self, tenant_id: Uuid) -> Result<TenantRecord, KmsError> {
-        let mut tenants = self.tenants.write().expect("tenant lock poisoned");
-        let tenant = tenants.get_mut(&tenant_id).ok_or(KmsError::TenantNotFound)?;
-        let mut new_master_key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut new_master_key);
-        let wrapped_master_key =
-            wrap_key(&new_master_key, self.root_key.expose()).map_err(|_| KmsError::CryptoError)?;
-        new_master_key.zeroize();
-        tenant.key_version += 1;
-        tenant
-            .wrapped_master_keys
-            .insert(tenant.key_version, wrapped_master_key);
-        tenant.updated_at = current_timestamp();
-        Ok(tenant.clone())
-    }
-}
-
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct TenantRecord {
     pub id: Uuid,
     pub name: String,
-    pub wrapped_master_keys: HashMap<u32, Vec<u8>>,
+    pub wrapped_master_key: Vec<u8>,
     pub key_version: u32,
     pub crypto_policy_version: u32,
-    pub pq_keys: Vec<PqKeyRecord>,
-    pub audit_logs: Vec<AuditLog>,
-    pub created_at: u64,
-    pub updated_at: u64,
+    pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct PqKeyRecord {
+#[derive(Clone, Debug)]
+pub struct TenantKeyVersion {
+    pub tenant_id: Uuid,
     pub version: u32,
-    pub algorithm: String,
-    pub public_key: Vec<u8>,
-    pub wrapped_private_key: Vec<u8>,
-    pub created_at: u64,
+    pub wrapped_master_key: Vec<u8>,
+    pub created_at: chrono::NaiveDateTime,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AuditLog {
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct AuditLogEntry {
     pub id: Uuid,
     pub tenant_id: Uuid,
     pub event_type: String,
     pub event_hash: Vec<u8>,
     pub prev_hash: Option<Vec<u8>>,
     pub metadata: serde_json::Value,
-    pub created_at: u64,
+    pub created_at: chrono::NaiveDateTime,
 }
 
 pub fn wrap_key(key: &[u8], wrapping_key: &[u8]) -> Result<Vec<u8>, KmsError> {
@@ -172,24 +90,20 @@ pub fn unwrap_key(wrapped: &[u8], wrapping_key: &[u8]) -> Result<Vec<u8>, KmsErr
     q_core::decrypt_simple(wrapped, wrapping_key).map_err(|_| KmsError::CryptoError)
 }
 
-pub fn current_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+pub fn generate_master_key() -> [u8; 32] {
+    let mut key = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key);
+    key
 }
 
 pub fn append_audit_log(
-    tenant: &mut TenantRecord,
+    prev_hash: Option<Vec<u8>>,
+    tenant_id: Uuid,
     event_type: &str,
     metadata: serde_json::Value,
-) {
-    let prev_hash = tenant
-        .audit_logs
-        .last()
-        .map(|entry| entry.event_hash.clone());
+) -> AuditLogEntry {
     let event_payload = serde_json::json!({
-        "tenant_id": tenant.id,
+        "tenant_id": tenant_id,
         "event_type": event_type,
         "metadata": metadata,
         "prev_hash": prev_hash,
@@ -197,13 +111,13 @@ pub fn append_audit_log(
     let mut hasher = Sha256::new();
     hasher.update(serde_json::to_vec(&event_payload).unwrap_or_default());
     let event_hash = hasher.finalize().to_vec();
-    tenant.audit_logs.push(AuditLog {
+    AuditLogEntry {
         id: Uuid::new_v4(),
-        tenant_id: tenant.id,
+        tenant_id,
         event_type: event_type.to_string(),
         event_hash,
         prev_hash,
         metadata,
-        created_at: current_timestamp(),
-    });
+        created_at: chrono::Utc::now().naive_utc(),
+    }
 }

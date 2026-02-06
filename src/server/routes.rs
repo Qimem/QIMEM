@@ -3,9 +3,11 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit, Nonce};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
@@ -15,14 +17,16 @@ use crate::signing;
 use crate::pq;
 
 use super::auth::{AuthConfig, AuthError, AuthUser};
-use super::kms::{append_audit_log, current_timestamp, unwrap_key, wrap_key, KmsError, KmsState, PqKeyRecord, TenantRecord};
+use super::db::DbState;
+use super::kms::{append_audit_log, generate_master_key, unwrap_key, wrap_key, KmsError, RootKey, TenantRecord};
 use super::policy::{PolicyConfig, PolicyError};
 
 #[derive(Clone, Debug)]
 pub struct AppState {
     pub auth: AuthConfig,
     pub policy: PolicyConfig,
-    pub kms: KmsState,
+    pub db: DbState,
+    pub root_key: RootKey,
 }
 
 impl FromRef<AppState> for AuthConfig {
@@ -37,9 +41,9 @@ impl FromRef<AppState> for PolicyConfig {
     }
 }
 
-impl FromRef<AppState> for KmsState {
+impl FromRef<AppState> for DbState {
     fn from_ref(input: &AppState) -> Self {
-        input.kms.clone()
+        input.db.clone()
     }
 }
 
@@ -54,6 +58,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/kms/tenants", axum::routing::post(create_tenant))
         .route("/v1/kms/encrypt", axum::routing::post(kms_encrypt))
         .route("/v1/kms/decrypt", axum::routing::post(kms_decrypt))
+        .route("/v1/kms/wrap-dek", axum::routing::post(kms_wrap_dek))
+        .route("/v1/kms/unwrap-dek", axum::routing::post(kms_unwrap_dek))
         .route(
             "/v1/kms/rotate-master-key",
             axum::routing::post(rotate_master_key),
@@ -260,16 +266,36 @@ async fn create_tenant(
     Json(payload): Json<CreateTenantRequest>,
 ) -> Result<Json<CreateTenantResponse>, ApiError> {
     require_scope(&user, "tenants:write")?;
-    let tenant = state
-        .kms
-        .create_tenant(payload.name)
+    let mut master_key = generate_master_key();
+    let wrapped_master_key = wrap_key(&master_key, state.root_key.expose())
+        .map_err(|_| ApiError::Crypto("Tenant creation failed"))?;
+    master_key.zeroize();
+    let now = chrono::Utc::now().naive_utc();
+    let tenant = TenantRecord {
+        id: Uuid::new_v4(),
+        name: payload.name,
+        wrapped_master_key: wrapped_master_key.clone(),
+        key_version: 1,
+        crypto_policy_version: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    state
+        .db
+        .insert_tenant(&tenant)
+        .await
+        .map_err(|_| ApiError::Crypto("Tenant creation failed"))?;
+    state
+        .db
+        .insert_master_key_version(tenant.id, 1, &wrapped_master_key, now)
+        .await
         .map_err(|_| ApiError::Crypto("Tenant creation failed"))?;
     Ok(Json(CreateTenantResponse {
         tenant_id: tenant.id.to_string(),
         name: tenant.name,
         key_version: tenant.key_version,
         crypto_policy_version: tenant.crypto_policy_version,
-        created_at: tenant.created_at,
+        created_at: tenant.created_at.and_utc().timestamp() as u64,
     }))
 }
 
@@ -283,6 +309,8 @@ struct KmsEncryptResponse {
     ciphertext_b64: String,
     wrapped_dek_b64: String,
     key_version: u32,
+    nonce_b64: String,
+    algorithm: String,
 }
 
 async fn kms_encrypt(
@@ -293,36 +321,51 @@ async fn kms_encrypt(
 ) -> Result<Json<KmsEncryptResponse>, ApiError> {
     require_scope(&user, "kms:encrypt")?;
     let tenant_id = extract_tenant_id(&headers, &user)?;
-    let mut tenant = state.kms.get_tenant(tenant_id)?;
-    let wrapped_master_key = tenant
-        .wrapped_master_keys
-        .get(&tenant.key_version)
-        .ok_or(ApiError::InvalidInput("Missing master key"))?
-        .clone();
-    let mut master_key = unwrap_key(&wrapped_master_key, state.kms.root_key().expose())
+    let tenant = state
+        .db
+        .fetch_tenant(tenant_id)
+        .await
+        .map_err(|_| ApiError::Kms(KmsError::TenantNotFound))?;
+    let master_version = state
+        .db
+        .fetch_master_key_version(tenant_id, tenant.key_version as i32)
+        .await
+        .map_err(|_| ApiError::Kms(KmsError::KeyVersionNotFound))?;
+    let mut master_key = unwrap_key(&master_version.wrapped_master_key, state.root_key.expose())
         .map_err(|_| ApiError::Crypto("Master key unwrap failed"))?;
     let mut dek = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut dek);
     let plaintext = STANDARD
         .decode(payload.plaintext_b64)
         .map_err(|_| ApiError::InvalidInput("Invalid plaintext base64"))?;
-    let ciphertext = q_core::encrypt_simple(&plaintext, &dek)
+    let (ciphertext, nonce) = encrypt_payload(&plaintext, &dek)
         .map_err(|_| ApiError::Crypto("Encryption failed"))?;
     let wrapped_dek = wrap_key(&dek, &master_key)
         .map_err(|_| ApiError::Crypto("DEK wrap failed"))?;
-    let key_version = tenant.key_version;
-    append_audit_log(
-        &mut tenant,
+    let prev_hash = state
+        .db
+        .fetch_latest_audit_hash(tenant_id)
+        .await
+        .map_err(|_| ApiError::Crypto("Audit fetch failed"))?;
+    let log_entry = append_audit_log(
+        prev_hash,
+        tenant_id,
         "encrypt",
-        serde_json::json!({ "key_version": key_version }),
+        serde_json::json!({ "key_version": tenant.key_version }),
     );
-    state.kms.update_tenant(tenant)?;
+    state
+        .db
+        .insert_audit_log(&log_entry)
+        .await
+        .map_err(|_| ApiError::Crypto("Audit write failed"))?;
     dek.zeroize();
     master_key.zeroize();
     Ok(Json(KmsEncryptResponse {
         ciphertext_b64: STANDARD.encode(ciphertext),
         wrapped_dek_b64: STANDARD.encode(wrapped_dek),
-        key_version,
+        key_version: tenant.key_version,
+        nonce_b64: STANDARD.encode(nonce),
+        algorithm: "chacha20poly1305".to_string(),
     }))
 }
 
@@ -331,6 +374,8 @@ struct KmsDecryptRequest {
     ciphertext_b64: String,
     wrapped_dek_b64: String,
     key_version: u32,
+    nonce_b64: String,
+    algorithm: String,
 }
 
 #[derive(Serialize)]
@@ -346,14 +391,27 @@ async fn kms_decrypt(
 ) -> Result<Json<KmsDecryptResponse>, ApiError> {
     require_scope(&user, "kms:decrypt")?;
     let tenant_id = extract_tenant_id(&headers, &user)?;
-    let mut tenant = state.kms.get_tenant(tenant_id)?;
-    let wrapped_master_key = tenant
-        .wrapped_master_keys
-        .get(&payload.key_version)
-        .ok_or(ApiError::InvalidInput("Unknown key version"))?
-        .clone();
-    let mut master_key = unwrap_key(&wrapped_master_key, state.kms.root_key().expose())
+    let _tenant = state
+        .db
+        .fetch_tenant(tenant_id)
+        .await
+        .map_err(|_| ApiError::Kms(KmsError::TenantNotFound))?;
+    let master_version = state
+        .db
+        .fetch_master_key_version(tenant_id, payload.key_version as i32)
+        .await
+        .map_err(|_| ApiError::Kms(KmsError::KeyVersionNotFound))?;
+    let mut master_key = unwrap_key(&master_version.wrapped_master_key, state.root_key.expose())
         .map_err(|_| ApiError::Crypto("Master key unwrap failed"))?;
+    let algorithm_ok = payload
+        .algorithm
+        .as_bytes()
+        .ct_eq(b"chacha20poly1305")
+        .unwrap_u8()
+        == 1;
+    if !algorithm_ok {
+        return Err(ApiError::InvalidInput("Unsupported algorithm"));
+    }
     let wrapped_dek = STANDARD
         .decode(payload.wrapped_dek_b64)
         .map_err(|_| ApiError::InvalidInput("Invalid wrapped DEK base64"))?;
@@ -362,19 +420,113 @@ async fn kms_decrypt(
     let ciphertext = STANDARD
         .decode(payload.ciphertext_b64)
         .map_err(|_| ApiError::InvalidInput("Invalid ciphertext base64"))?;
-    let plaintext = q_core::decrypt_simple(&ciphertext, &dek)
+    let nonce = STANDARD
+        .decode(payload.nonce_b64)
+        .map_err(|_| ApiError::InvalidInput("Invalid nonce base64"))?;
+    let plaintext = decrypt_payload(&ciphertext, &nonce, &dek)
         .map_err(|_| ApiError::Crypto("Decryption failed"))?;
     dek.zeroize();
     master_key.zeroize();
-    append_audit_log(
-        &mut tenant,
+    let prev_hash = state
+        .db
+        .fetch_latest_audit_hash(tenant_id)
+        .await
+        .map_err(|_| ApiError::Crypto("Audit fetch failed"))?;
+    let log_entry = append_audit_log(
+        prev_hash,
+        tenant_id,
         "decrypt",
         serde_json::json!({ "key_version": payload.key_version }),
     );
-    state.kms.update_tenant(tenant)?;
+    state
+        .db
+        .insert_audit_log(&log_entry)
+        .await
+        .map_err(|_| ApiError::Crypto("Audit write failed"))?;
     Ok(Json(KmsDecryptResponse {
         plaintext_b64: STANDARD.encode(plaintext),
     }))
+}
+
+#[derive(Deserialize)]
+struct KmsWrapDekRequest {
+    dek_b64: String,
+}
+
+#[derive(Serialize)]
+struct KmsWrapDekResponse {
+    wrapped_dek_b64: String,
+    key_version: u32,
+}
+
+async fn kms_wrap_dek(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Json(payload): Json<KmsWrapDekRequest>,
+) -> Result<Json<KmsWrapDekResponse>, ApiError> {
+    require_scope(&user, "kms:encrypt")?;
+    let tenant_id = extract_tenant_id(&headers, &user)?;
+    let tenant = state
+        .db
+        .fetch_tenant(tenant_id)
+        .await
+        .map_err(|_| ApiError::Kms(KmsError::TenantNotFound))?;
+    let master_version = state
+        .db
+        .fetch_master_key_version(tenant_id, tenant.key_version as i32)
+        .await
+        .map_err(|_| ApiError::Kms(KmsError::KeyVersionNotFound))?;
+    let mut master_key = unwrap_key(&master_version.wrapped_master_key, state.root_key.expose())
+        .map_err(|_| ApiError::Crypto("Master key unwrap failed"))?;
+    let mut dek = STANDARD
+        .decode(payload.dek_b64)
+        .map_err(|_| ApiError::InvalidInput("Invalid DEK base64"))?;
+    let wrapped_dek = wrap_key(&dek, &master_key)
+        .map_err(|_| ApiError::Crypto("DEK wrap failed"))?;
+    dek.zeroize();
+    master_key.zeroize();
+    Ok(Json(KmsWrapDekResponse {
+        wrapped_dek_b64: STANDARD.encode(wrapped_dek),
+        key_version: tenant.key_version,
+    }))
+}
+
+#[derive(Deserialize)]
+struct KmsUnwrapDekRequest {
+    wrapped_dek_b64: String,
+    key_version: u32,
+}
+
+#[derive(Serialize)]
+struct KmsUnwrapDekResponse {
+    dek_b64: String,
+}
+
+async fn kms_unwrap_dek(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Json(payload): Json<KmsUnwrapDekRequest>,
+) -> Result<Json<KmsUnwrapDekResponse>, ApiError> {
+    require_scope(&user, "kms:decrypt")?;
+    let tenant_id = extract_tenant_id(&headers, &user)?;
+    let master_version = state
+        .db
+        .fetch_master_key_version(tenant_id, payload.key_version as i32)
+        .await
+        .map_err(|_| ApiError::Kms(KmsError::KeyVersionNotFound))?;
+    let mut master_key = unwrap_key(&master_version.wrapped_master_key, state.root_key.expose())
+        .map_err(|_| ApiError::Crypto("Master key unwrap failed"))?;
+    let wrapped_dek = STANDARD
+        .decode(payload.wrapped_dek_b64)
+        .map_err(|_| ApiError::InvalidInput("Invalid wrapped DEK base64"))?;
+    let mut dek = unwrap_key(&wrapped_dek, &master_key)
+        .map_err(|_| ApiError::Crypto("DEK unwrap failed"))?;
+    master_key.zeroize();
+    let dek_b64 = STANDARD.encode(&dek);
+    dek.zeroize();
+    Ok(Json(KmsUnwrapDekResponse { dek_b64 }))
 }
 
 #[derive(Serialize)]
@@ -390,17 +542,46 @@ async fn rotate_master_key(
 ) -> Result<Json<RotateMasterKeyResponse>, ApiError> {
     require_scope(&user, "kms:rotate")?;
     let tenant_id = extract_tenant_id(&headers, &user)?;
-    let mut tenant = state.kms.rotate_master_key(tenant_id)?;
-    let key_version = tenant.key_version;
-    append_audit_log(
-        &mut tenant,
+    let tenant = state
+        .db
+        .fetch_tenant(tenant_id)
+        .await
+        .map_err(|_| ApiError::Kms(KmsError::TenantNotFound))?;
+    let mut new_master_key = generate_master_key();
+    let wrapped_master_key = wrap_key(&new_master_key, state.root_key.expose())
+        .map_err(|_| ApiError::Crypto("Master key wrap failed"))?;
+    new_master_key.zeroize();
+    let next_version = tenant.key_version + 1;
+    let now = chrono::Utc::now().naive_utc();
+    state
+        .db
+        .insert_master_key_version(tenant_id, next_version as i32, &wrapped_master_key, now)
+        .await
+        .map_err(|_| ApiError::Crypto("Master key rotation failed"))?;
+    state
+        .db
+        .update_tenant_key_version(tenant_id, next_version as i32, now)
+        .await
+        .map_err(|_| ApiError::Crypto("Master key rotation failed"))?;
+    let prev_hash = state
+        .db
+        .fetch_latest_audit_hash(tenant_id)
+        .await
+        .map_err(|_| ApiError::Crypto("Audit fetch failed"))?;
+    let log_entry = append_audit_log(
+        prev_hash,
+        tenant_id,
         "rotate_master_key",
-        serde_json::json!({ "key_version": key_version }),
+        serde_json::json!({ "key_version": next_version }),
     );
-    state.kms.update_tenant(tenant.clone())?;
+    state
+        .db
+        .insert_audit_log(&log_entry)
+        .await
+        .map_err(|_| ApiError::Crypto("Audit write failed"))?;
     Ok(Json(RotateMasterKeyResponse {
-        key_version,
-        rotated_at: tenant.updated_at,
+        key_version: next_version,
+        rotated_at: now.and_utc().timestamp() as u64,
     }))
 }
 
@@ -424,30 +605,54 @@ async fn kms_pq_keypair(
 ) -> Result<Json<PqKeypairResponse>, ApiError> {
     require_scope(&user, "kms:pq:write")?;
     let tenant_id = extract_tenant_id(&headers, &user)?;
-    let mut tenant = state.kms.get_tenant(tenant_id)?;
+    let tenant = state
+        .db
+        .fetch_tenant(tenant_id)
+        .await
+        .map_err(|_| ApiError::Kms(KmsError::TenantNotFound))?;
     let algorithm = pq::PqAlgorithm::from_name(payload.algorithm.as_deref())
         .map_err(|_| ApiError::InvalidInput("Unsupported PQ algorithm"))?;
     let keypair = pq::keypair(algorithm);
-    let mut master_key = unwrap_master_key(&tenant, &state)?;
+    let master_version = state
+        .db
+        .fetch_master_key_version(tenant_id, tenant.key_version as i32)
+        .await
+        .map_err(|_| ApiError::Kms(KmsError::KeyVersionNotFound))?;
+    let mut master_key = unwrap_key(&master_version.wrapped_master_key, state.root_key.expose())
+        .map_err(|_| ApiError::Crypto("Master key unwrap failed"))?;
     let wrapped_private_key = wrap_key(&keypair.secret_key, &master_key)?;
     master_key.zeroize();
-    let version = tenant.pq_keys.len() as u32 + 1;
-    tenant.pq_keys.push(PqKeyRecord {
-        version,
-        algorithm: keypair.algorithm.to_string(),
-        public_key: keypair.public_key.clone(),
-        wrapped_private_key,
-        created_at: current_timestamp(),
-    });
-    append_audit_log(
-        &mut tenant,
+    let now = chrono::Utc::now().naive_utc();
+    state
+        .db
+        .insert_pq_key(
+            tenant_id,
+            &keypair.algorithm.to_string(),
+            &keypair.public_key,
+            &wrapped_private_key,
+            now,
+        )
+        .await
+        .map_err(|_| ApiError::Crypto("PQ keypair storage failed"))?;
+    let prev_hash = state
+        .db
+        .fetch_latest_audit_hash(tenant_id)
+        .await
+        .map_err(|_| ApiError::Crypto("Audit fetch failed"))?;
+    let log_entry = append_audit_log(
+        prev_hash,
+        tenant_id,
         "pq_keypair",
-        serde_json::json!({ "version": version, "algorithm": keypair.algorithm.to_string() }),
+        serde_json::json!({ "algorithm": keypair.algorithm.to_string() }),
     );
-    state.kms.update_tenant(tenant)?;
+    state
+        .db
+        .insert_audit_log(&log_entry)
+        .await
+        .map_err(|_| ApiError::Crypto("Audit write failed"))?;
     Ok(Json(PqKeypairResponse {
         algorithm: keypair.algorithm.to_string(),
-        version,
+        version: tenant.key_version,
         public_key_b64: STANDARD.encode(keypair.public_key),
     }))
 }
@@ -462,6 +667,9 @@ struct PqSessionRequest {
 #[derive(Serialize)]
 struct PqSessionResponse {
     algorithm: String,
+    algorithm_id: String,
+    version: u32,
+    timestamp: u64,
     server_x25519_public_key_b64: String,
     kyber_ciphertext_b64: String,
     session_key_b64: String,
@@ -486,8 +694,12 @@ async fn kms_pq_session(
     let (server_public, session_key, ciphertext) =
         pq::hybrid_session(algorithm, &client_x25519_public, &client_kyber_public)
             .map_err(|_| ApiError::Crypto("Hybrid session failed"))?;
+    let now = chrono::Utc::now().timestamp() as u64;
     Ok(Json(PqSessionResponse {
         algorithm: algorithm.to_string(),
+        algorithm_id: algorithm.algorithm_id().to_string(),
+        version: 1,
+        timestamp: now,
         server_x25519_public_key_b64: STANDARD.encode(server_public),
         kyber_ciphertext_b64: STANDARD.encode(ciphertext),
         session_key_b64: STANDARD.encode(session_key),
@@ -575,10 +787,14 @@ fn extract_tenant_id(headers: &HeaderMap, user: &AuthUser) -> Result<Uuid, ApiEr
         .map_err(|_| ApiError::InvalidInput("Invalid tenant header"))?;
     let tenant_id = Uuid::parse_str(header_value)
         .map_err(|_| ApiError::InvalidInput("Invalid tenant id"))?;
-    if let Some(user_tenant) = &user.tenant_id {
-        if user_tenant != header_value {
-            return Err(ApiError::Auth(AuthError::InvalidToken));
-        }
+    let user_tenant = user
+        .tenant_id
+        .as_ref()
+        .ok_or(ApiError::Auth(AuthError::InvalidToken))?;
+    let user_tenant_id =
+        Uuid::parse_str(user_tenant).map_err(|_| ApiError::InvalidInput("Invalid tenant id"))?;
+    if tenant_id.as_bytes().ct_eq(user_tenant_id.as_bytes()).unwrap_u8() != 1 {
+        return Err(ApiError::Auth(AuthError::InvalidToken));
     }
     Ok(tenant_id)
 }
@@ -591,11 +807,23 @@ fn require_scope(user: &AuthUser, scope: &str) -> Result<(), ApiError> {
     }
 }
 
-fn unwrap_master_key(tenant: &TenantRecord, state: &AppState) -> Result<Vec<u8>, ApiError> {
-    let wrapped_master_key = tenant
-        .wrapped_master_keys
-        .get(&tenant.key_version)
-        .ok_or(ApiError::InvalidInput("Missing master key"))?;
-    unwrap_key(wrapped_master_key, state.kms.root_key().expose())
-        .map_err(|_| ApiError::Crypto("Master key unwrap failed"))
+fn encrypt_payload(plaintext: &[u8], dek: &[u8]) -> Result<(Vec<u8>, Vec<u8>), ApiError> {
+    let cipher = ChaCha20Poly1305::new_from_slice(dek)
+        .map_err(|_| ApiError::Crypto("Encryption failed"))?;
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext)
+        .map_err(|_| ApiError::Crypto("Encryption failed"))?;
+    Ok((ciphertext, nonce_bytes.to_vec()))
+}
+
+fn decrypt_payload(ciphertext: &[u8], nonce_bytes: &[u8], dek: &[u8]) -> Result<Vec<u8>, ApiError> {
+    let cipher = ChaCha20Poly1305::new_from_slice(dek)
+        .map_err(|_| ApiError::Crypto("Decryption failed"))?;
+    let nonce = Nonce::from_slice(nonce_bytes);
+    cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|_| ApiError::Crypto("Decryption failed"))
 }

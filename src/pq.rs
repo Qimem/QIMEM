@@ -30,6 +30,50 @@ impl std::fmt::Display for PqAlgorithm {
     }
 }
 
+pub trait KexAlgorithm {
+    fn keypair() -> (Vec<u8>, Vec<u8>);
+    fn encapsulate(public_key: &[u8]) -> Result<(Vec<u8>, Vec<u8>), &'static str>;
+    fn decapsulate(secret_key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, &'static str>;
+    fn algorithm_id() -> &'static str;
+}
+
+pub struct Kyber1024Kex;
+
+impl KexAlgorithm for Kyber1024Kex {
+    fn keypair() -> (Vec<u8>, Vec<u8>) {
+        let (public_key, secret_key) = kyber1024::keypair();
+        (public_key.as_bytes().to_vec(), secret_key.as_bytes().to_vec())
+    }
+
+    fn encapsulate(public_key: &[u8]) -> Result<(Vec<u8>, Vec<u8>), &'static str> {
+        let public_key = kyber1024::PublicKey::from_bytes(public_key)
+            .map_err(|_| "Invalid public key")?;
+        let (ciphertext, shared_secret) = kyber1024::encapsulate(&public_key);
+        Ok((ciphertext.as_bytes().to_vec(), shared_secret.as_bytes().to_vec()))
+    }
+
+    fn decapsulate(secret_key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, &'static str> {
+        let secret_key = kyber1024::SecretKey::from_bytes(secret_key)
+            .map_err(|_| "Invalid secret key")?;
+        let ciphertext = kyber1024::Ciphertext::from_bytes(ciphertext)
+            .map_err(|_| "Invalid ciphertext")?;
+        let shared_secret = kyber1024::decapsulate(&ciphertext, &secret_key);
+        Ok(shared_secret.as_bytes().to_vec())
+    }
+
+    fn algorithm_id() -> &'static str {
+        "kyber1024"
+    }
+}
+
+impl PqAlgorithm {
+    pub fn algorithm_id(&self) -> &'static str {
+        match self {
+            PqAlgorithm::Kyber1024 => "kyber1024",
+        }
+    }
+}
+
 pub struct PqKeypair {
     pub algorithm: PqAlgorithm,
     pub public_key: Vec<u8>,
