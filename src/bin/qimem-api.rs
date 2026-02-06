@@ -6,7 +6,7 @@ use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
-use qimem::server::{policy_middleware, router, AppState, AuthConfig, PolicyConfig};
+use qimem::server::{policy_middleware, router, AppState, AuthConfig, DbState, PolicyConfig, RootKey};
 
 #[tokio::main]
 async fn main() {
@@ -18,8 +18,13 @@ async fn main() {
 
     let auth = AuthConfig::from_env().expect("Missing Better Auth configuration");
     let policy = PolicyConfig::from_env();
+    let root_key = RootKey::from_env().expect("Missing KMS root key configuration");
+    let database_url = env::var("QIMEM_DATABASE_URL").expect("Missing QIMEM_DATABASE_URL");
+    let db = DbState::connect(&database_url)
+        .await
+        .expect("Failed to connect to Postgres");
 
-    let state = AppState { auth, policy };
+    let state = AppState { auth, policy, db, root_key };
 
     let rate_limit = GovernorConfigBuilder::default()
         .burst_size(60)

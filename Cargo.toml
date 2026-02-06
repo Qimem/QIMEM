@@ -36,6 +36,14 @@ tower_governor = "0.4"
 jsonwebtoken = "9.3"
 pqcrypto-kyber = "0.7"
 pqcrypto-traits = "0.3"
+hkdf = "0.12"
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
+zeroize = "1.8"
+chrono = { version = "0.4", features = ["serde"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+subtle = "2.6"
 
 [build-dependencies]
 pyo3-build-config = "0.22"
