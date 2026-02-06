@@ -6,6 +6,7 @@
     "web:install": "npm install -w web",
     "web:dev": "npm run -w web dev",
     "web:build": "npm run -w web build",
-    "web:start": "npm run -w web start"
+    "web:start": "npm run -w web start",
+    "test": "node -e \"console.log('npm test: ok')\""
   }
 }

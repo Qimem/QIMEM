@@ -45,5 +45,8 @@ sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 subtle = "2.6"
 
+[dev-dependencies]
+testcontainers = "0.15"
+
 [build-dependencies]
 pyo3-build-config = "0.22"

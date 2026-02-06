@@ -1,14 +1,14 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use jsonwebtoken::{encode, EncodingKey, Header};
-use rand::RngCore;
 use serde::Serialize;
 use tower::ServiceExt;
 
-use qimem::server::{router, AppState, AuthConfig, DbState, PolicyConfig, RootKey};
+use qimem::server::{router, AppState, AuthConfig, KmsService, PolicyConfig};
+
+mod test_support;
 
 #[derive(Serialize)]
 struct Claims {
@@ -20,11 +20,7 @@ struct Claims {
 
 #[tokio::test]
 async fn test_tenant_header_mismatch_rejected() {
-    let database_url = match std::env::var("QIMEM_DATABASE_URL") {
-        Ok(value) => value,
-        Err(_) => return,
-    };
-    let db = DbState::connect(&database_url).await.unwrap();
+    let test_db = test_support::setup_test_db().await;
     let auth = AuthConfig {
         jwt_secret: "test-secret".to_string(),
         issuer: None,
@@ -32,20 +28,10 @@ async fn test_tenant_header_mismatch_rejected() {
         auth_disabled: false,
     };
     let policy = PolicyConfig::from_env();
-    let root_key = RootKey::from_env().unwrap_or_else(|_| {
-        let mut bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        let encoded = STANDARD.encode(bytes);
-        std::env::set_var("QIMEM_ROOT_KEY_B64", encoded);
-        RootKey::from_env().expect("root key")
-    });
+    let root_key_b64 = base64::engine::general_purpose::STANDARD.encode([3u8; 32]);
+    let kms = KmsService::new_with_root_key(test_db.db, &root_key_b64).unwrap();
 
-    let state = AppState {
-        auth,
-        policy,
-        db,
-        root_key,
-    };
+    let state = AppState { auth, policy, kms };
     let app: Router = router(state);
 
     let tenant_a = uuid::Uuid::new_v4();
@@ -70,7 +56,7 @@ async fn test_tenant_header_mismatch_rejected() {
         .header("X-Tenant-ID", tenant_b.to_string())
         .header("Content-Type", "application/json")
         .body(Body::from(
-            r#"{\"ciphertext_b64\":\"\",\"wrapped_dek_b64\":\"\",\"key_version\":1,\"nonce_b64\":\"\",\"algorithm\":\"chacha20poly1305\"}"#,
+            r#"{"ciphertext_b64":"","wrapped_dek_b64":"","key_version":1,"nonce_b64":"","algorithm":"chacha20poly1305"}"#,
         ))
         .unwrap();
 

@@ -5,8 +5,6 @@ use axum::extract::{FromRef, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{routing::post, Json, Router};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit, Nonce};
 use reqwest::header::HeaderMap as ReqwestHeaderMap;
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
@@ -14,14 +12,12 @@ use uuid::Uuid;
 use zeroize::Zeroize;
 
 use qimem::server::auth::{AuthConfig, AuthError, AuthUser};
-use qimem::server::db::DbState;
-use qimem::server::kms::{append_audit_log, unwrap_key, KmsError, RootKey};
+use qimem::server::KmsService;
 
 #[derive(Clone, Debug)]
 struct GatewayState {
     auth: AuthConfig,
-    db: DbState,
-    root_key: RootKey,
+    kms: KmsService,
 }
 
 impl FromRef<GatewayState> for AuthConfig {
@@ -62,13 +58,11 @@ async fn main() {
         .unwrap_or(8081);
 
     let auth = AuthConfig::from_env().expect("Missing Better Auth configuration");
-    let root_key = RootKey::from_env().expect("Missing KMS root key configuration");
-    let database_url = env::var("QIMEM_DATABASE_URL").expect("Missing QIMEM_DATABASE_URL");
-    let db = DbState::connect(&database_url)
+    let kms = KmsService::from_env()
         .await
-        .expect("Failed to connect to Postgres");
+        .expect("Missing KMS configuration");
 
-    let state = GatewayState { auth, db, root_key };
+    let state = GatewayState { auth, kms };
 
     let app = Router::new()
         .route("/v1/gateway/proxy", post(proxy_handler))
@@ -101,33 +95,18 @@ async fn proxy_handler(
     if !algorithm_ok {
         return Err(GatewayError::InvalidInput("Unsupported algorithm"));
     }
-    let tenant = state
-        .db
-        .fetch_tenant(tenant_id)
+    let plaintext = state
+        .kms
+        .decrypt_for_gateway(
+            tenant_id,
+            payload.wrapped_dek.clone(),
+            payload.encrypted_payload.clone(),
+            payload.nonce.clone(),
+            payload.algorithm.clone(),
+            payload.key_version,
+        )
         .await
-        .map_err(|_| GatewayError::Kms(KmsError::TenantNotFound))?;
-    let master_version = state
-        .db
-        .fetch_master_key_version(tenant_id, payload.key_version as i32)
-        .await
-        .map_err(|_| GatewayError::Kms(KmsError::KeyVersionNotFound))?;
-    let mut master_key = unwrap_key(&master_version.wrapped_master_key, state.root_key.expose())
-        .map_err(|_| GatewayError::Crypto("Master key unwrap failed"))?;
-    let wrapped_dek = STANDARD
-        .decode(payload.wrapped_dek)
-        .map_err(|_| GatewayError::InvalidInput("Invalid wrapped DEK base64"))?;
-    let mut dek = unwrap_key(&wrapped_dek, &master_key)
-        .map_err(|_| GatewayError::Crypto("DEK unwrap failed"))?;
-    let ciphertext = STANDARD
-        .decode(payload.encrypted_payload)
-        .map_err(|_| GatewayError::InvalidInput("Invalid ciphertext base64"))?;
-    let nonce = STANDARD
-        .decode(payload.nonce)
-        .map_err(|_| GatewayError::InvalidInput("Invalid nonce base64"))?;
-    let plaintext = decrypt_payload(&ciphertext, &nonce, &dek)
         .map_err(|_| GatewayError::Crypto("Decryption failed"))?;
-    dek.zeroize();
-    master_key.zeroize();
 
     let provider_response = match payload.provider.as_str() {
         "mock" => {
@@ -169,23 +148,15 @@ async fn proxy_handler(
         _ => return Err(GatewayError::InvalidInput("Unsupported provider")),
     };
 
-    let prev_hash = state
-        .db
-        .fetch_latest_audit_hash(tenant_id)
-        .await
-        .map_err(|_| GatewayError::Crypto("Audit fetch failed"))?;
-    let log_entry = append_audit_log(
-        prev_hash,
-        tenant_id,
-        "decrypt",
-        serde_json::json!({
-            "provider": payload.provider,
-            "key_version": tenant.key_version,
-        }),
-    );
     state
-        .db
-        .insert_audit_log(&log_entry)
+        .kms
+        .log_gateway_decrypt(
+            tenant_id,
+            serde_json::json!({
+                "provider": payload.provider,
+                "key_version": payload.key_version,
+            }),
+        )
         .await
         .map_err(|_| GatewayError::Crypto("Audit write failed"))?;
 
@@ -218,21 +189,11 @@ fn extract_tenant_id(headers: &HeaderMap, user: &AuthUser) -> Result<Uuid, Gatew
     Ok(tenant_id)
 }
 
-fn decrypt_payload(ciphertext: &[u8], nonce_bytes: &[u8], dek: &[u8]) -> Result<Vec<u8>, GatewayError> {
-    let cipher = ChaCha20Poly1305::new_from_slice(dek)
-        .map_err(|_| GatewayError::Crypto("Decryption failed"))?;
-    let nonce = Nonce::from_slice(nonce_bytes);
-    cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|_| GatewayError::Crypto("Decryption failed"))
-}
-
 #[derive(Debug)]
 enum GatewayError {
     InvalidInput(&'static str),
     Crypto(&'static str),
     Auth(AuthError),
-    Kms(KmsError),
 }
 
 impl IntoResponse for GatewayError {
@@ -241,11 +202,6 @@ impl IntoResponse for GatewayError {
             GatewayError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
             GatewayError::Crypto(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             GatewayError::Auth(_) => (StatusCode::UNAUTHORIZED, "Unauthorized"),
-            GatewayError::Kms(err) => match err {
-                KmsError::TenantNotFound => (StatusCode::NOT_FOUND, "Tenant not found"),
-                KmsError::KeyVersionNotFound => (StatusCode::NOT_FOUND, "Key version not found"),
-                _ => (StatusCode::INTERNAL_SERVER_ERROR, "KMS error"),
-            },
         };
         (status, Json(serde_json::json!({"error": message}))).into_response()
     }

@@ -138,9 +138,12 @@ pub fn hybrid_session(
     );
     let x25519_shared = server_secret.diffie_hellman(&client_public);
     let (ciphertext, kyber_shared) = encapsulate(algorithm, client_kyber_public)?;
-    let hk = Hkdf::<Sha256>::new(None, &[x25519_shared.as_bytes(), kyber_shared.as_slice()].concat());
+    let hk = Hkdf::<Sha256>::new(
+        None,
+        &[x25519_shared.as_bytes(), kyber_shared.as_slice()].concat(),
+    );
     let mut session_key = vec![0u8; 32];
-    hk.expand(b"qimem-hybrid-session", &mut session_key)
+    hk.expand(b"qimem-hybrid-session-v1", &mut session_key)
         .map_err(|_| "HKDF failed")?;
     Ok((
         server_public.as_bytes().to_vec(),

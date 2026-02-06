@@ -1,82 +1,23 @@
 use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit, Nonce};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use rand::RngCore;
-use sqlx::PgPool;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
 use qimem::pq;
-use qimem::server::db::DbState;
-use qimem::server::kms::{append_audit_log, generate_master_key, unwrap_key, wrap_key};
+use qimem::server::kms::{
+    append_audit_log, generate_master_key, rotate_root_key, unwrap_key, wrap_key, KmsError,
+    RootRotationOptions,
+};
 
-async fn setup_pool() -> Option<PgPool> {
-    let database_url = std::env::var("QIMEM_DATABASE_URL").ok()?;
-    let pool = PgPool::connect(&database_url).await.ok()?;
-    Some(pool)
-}
-
-async fn setup_schema(pool: &PgPool) {
-    let _ = sqlx::query(
-        "CREATE TABLE IF NOT EXISTS tenants (
-            id UUID PRIMARY KEY,
-            name TEXT NOT NULL,
-            wrapped_master_key BYTEA NOT NULL,
-            key_version INT NOT NULL DEFAULT 1,
-            crypto_policy_version INT NOT NULL DEFAULT 1,
-            created_at TIMESTAMP NOT NULL,
-            updated_at TIMESTAMP NOT NULL
-        )",
-    )
-    .execute(pool)
-    .await;
-    let _ = sqlx::query(
-        "CREATE TABLE IF NOT EXISTS tenant_master_key_versions (
-            tenant_id UUID REFERENCES tenants(id),
-            version INT NOT NULL,
-            wrapped_master_key BYTEA NOT NULL,
-            created_at TIMESTAMP NOT NULL,
-            PRIMARY KEY (tenant_id, version)
-        )",
-    )
-    .execute(pool)
-    .await;
-    let _ = sqlx::query(
-        "CREATE TABLE IF NOT EXISTS tenant_pq_keys (
-            tenant_id UUID REFERENCES tenants(id),
-            algorithm TEXT NOT NULL,
-            public_key BYTEA NOT NULL,
-            wrapped_private_key BYTEA NOT NULL,
-            created_at TIMESTAMP NOT NULL
-        )",
-    )
-    .execute(pool)
-    .await;
-    let _ = sqlx::query(
-        "CREATE TABLE IF NOT EXISTS audit_logs (
-            id UUID PRIMARY KEY,
-            tenant_id UUID REFERENCES tenants(id),
-            event_type TEXT NOT NULL,
-            event_hash BYTEA NOT NULL,
-            prev_hash BYTEA,
-            metadata JSONB,
-            created_at TIMESTAMP NOT NULL
-        )",
-    )
-    .execute(pool)
-    .await;
-}
+mod test_support;
 
 #[tokio::test]
 async fn test_encrypt_rotate_decrypt() {
-    let Some(pool) = setup_pool().await else {
-        return;
-    };
-    setup_schema(&pool).await;
-    let db = DbState::connect(&std::env::var("QIMEM_DATABASE_URL").unwrap())
-        .await
-        .unwrap();
+    let test_db = test_support::setup_test_db().await;
     let tenant_id = uuid::Uuid::new_v4();
-    let mut root_key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut root_key);
+    let mut root_key = [7u8; 32];
     let mut master_key = generate_master_key();
     let wrapped_master_key = wrap_key(&master_key, &root_key).unwrap();
     master_key.zeroize();
@@ -90,8 +31,10 @@ async fn test_encrypt_rotate_decrypt() {
         created_at: now,
         updated_at: now,
     };
-    db.insert_tenant(&tenant).await.unwrap();
-    db.insert_master_key_version(tenant_id, 1, &wrapped_master_key, now)
+    test_db.db.insert_tenant(&tenant).await.unwrap();
+    test_db
+        .db
+        .insert_master_key_version(tenant_id, 1, &wrapped_master_key, now)
         .await
         .unwrap();
 
@@ -109,10 +52,14 @@ async fn test_encrypt_rotate_decrypt() {
     let wrapped_master_v2 = wrap_key(&new_master, &root_key).unwrap();
     new_master.zeroize();
     let now_v2 = chrono::Utc::now().naive_utc();
-    db.insert_master_key_version(tenant_id, 2, &wrapped_master_v2, now_v2)
+    test_db
+        .db
+        .insert_master_key_version(tenant_id, 2, &wrapped_master_v2, now_v2)
         .await
         .unwrap();
-    db.update_tenant_key_version(tenant_id, 2, now_v2)
+    test_db
+        .db
+        .update_tenant_key_version(tenant_id, 2, now_v2)
         .await
         .unwrap();
 
@@ -127,17 +74,10 @@ async fn test_encrypt_rotate_decrypt() {
 
 #[tokio::test]
 async fn test_cross_tenant_isolation() {
-    let Some(pool) = setup_pool().await else {
-        return;
-    };
-    setup_schema(&pool).await;
-    let db = DbState::connect(&std::env::var("QIMEM_DATABASE_URL").unwrap())
-        .await
-        .unwrap();
+    let test_db = test_support::setup_test_db().await;
     let tenant_a = uuid::Uuid::new_v4();
     let tenant_b = uuid::Uuid::new_v4();
-    let mut root_key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut root_key);
+    let mut root_key = [9u8; 32];
     let mut master_a = generate_master_key();
     let wrapped_a = wrap_key(&master_a, &root_key).unwrap();
     master_a.zeroize();
@@ -145,32 +85,40 @@ async fn test_cross_tenant_isolation() {
     let wrapped_b = wrap_key(&master_b, &root_key).unwrap();
     master_b.zeroize();
     let now = chrono::Utc::now().naive_utc();
-    db.insert_tenant(&qimem::server::kms::TenantRecord {
-        id: tenant_a,
-        name: "tenant-a".to_string(),
-        wrapped_master_key: wrapped_a.clone(),
-        key_version: 1,
-        crypto_policy_version: 1,
-        created_at: now,
-        updated_at: now,
-    })
-    .await
-    .unwrap();
-    db.insert_tenant(&qimem::server::kms::TenantRecord {
-        id: tenant_b,
-        name: "tenant-b".to_string(),
-        wrapped_master_key: wrapped_b.clone(),
-        key_version: 1,
-        crypto_policy_version: 1,
-        created_at: now,
-        updated_at: now,
-    })
-    .await
-    .unwrap();
-    db.insert_master_key_version(tenant_a, 1, &wrapped_a, now)
+    test_db
+        .db
+        .insert_tenant(&qimem::server::kms::TenantRecord {
+            id: tenant_a,
+            name: "tenant-a".to_string(),
+            wrapped_master_key: wrapped_a.clone(),
+            key_version: 1,
+            crypto_policy_version: 1,
+            created_at: now,
+            updated_at: now,
+        })
         .await
         .unwrap();
-    db.insert_master_key_version(tenant_b, 1, &wrapped_b, now)
+    test_db
+        .db
+        .insert_tenant(&qimem::server::kms::TenantRecord {
+            id: tenant_b,
+            name: "tenant-b".to_string(),
+            wrapped_master_key: wrapped_b.clone(),
+            key_version: 1,
+            crypto_policy_version: 1,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    test_db
+        .db
+        .insert_master_key_version(tenant_a, 1, &wrapped_a, now)
+        .await
+        .unwrap();
+    test_db
+        .db
+        .insert_master_key_version(tenant_b, 1, &wrapped_b, now)
         .await
         .unwrap();
 
@@ -186,12 +134,20 @@ async fn test_pq_session_metadata() {
     let client_secret = x25519_dalek::StaticSecret::new(rand_core::OsRng);
     let client_public = x25519_dalek::PublicKey::from(&client_secret);
     let kyber = pq::keypair(pq::PqAlgorithm::Kyber1024);
-    let (server_public, session_key, _ciphertext) =
-        pq::hybrid_session(pq::PqAlgorithm::Kyber1024, client_public.as_bytes(), &kyber.public_key)
-            .unwrap();
+    let (server_public, session_key, _ciphertext) = pq::hybrid_session(
+        pq::PqAlgorithm::Kyber1024,
+        client_public.as_bytes(),
+        &kyber.public_key,
+    )
+    .unwrap();
     assert_eq!(server_public.len(), 32);
     assert_eq!(session_key.len(), 32);
-    assert!(pq::PqAlgorithm::Kyber1024.algorithm_id().as_bytes().ct_eq(b"kyber1024").unwrap_u8() == 1);
+    assert!(pq::PqAlgorithm::Kyber1024
+        .algorithm_id()
+        .as_bytes()
+        .ct_eq(b"kyber1024")
+        .unwrap_u8()
+        == 1);
 }
 
 #[tokio::test]
@@ -211,4 +167,79 @@ async fn test_audit_chain_integrity() {
         serde_json::json!({"b": 2}),
     );
     assert_eq!(second.event_hash, recomputed.event_hash);
+}
+
+#[tokio::test]
+async fn test_root_rotation_requires_flags() {
+    let err = rotate_root_key(RootRotationOptions {
+        dry_run: true,
+        enable_destructive: false,
+        confirmation: "".to_string(),
+    })
+    .await
+    .unwrap_err();
+    assert!(matches!(err, KmsError::RotationNotEnabled));
+}
+
+#[tokio::test]
+async fn test_root_rotation_requires_confirmation() {
+    let err = rotate_root_key(RootRotationOptions {
+        dry_run: true,
+        enable_destructive: true,
+        confirmation: "nope".to_string(),
+    })
+    .await
+    .unwrap_err();
+    assert!(matches!(err, KmsError::RotationConfirmationMissing));
+}
+
+#[tokio::test]
+async fn test_root_rotation_rewraps_keys() {
+    let test_db = test_support::setup_test_db().await;
+    let tenant_id = uuid::Uuid::new_v4();
+    let old_root = [1u8; 32];
+    let new_root = [2u8; 32];
+    let old_root_b64 = STANDARD.encode(old_root);
+    let new_root_b64 = STANDARD.encode(new_root);
+
+    std::env::set_var("QIMEM_DATABASE_URL", test_db.database_url);
+    std::env::set_var("QIMEM_ROOT_KEY_SOURCE", "env");
+    std::env::set_var("QIMEM_ROOT_KEY_B64", old_root_b64);
+    std::env::set_var("QIMEM_NEW_ROOT_KEY_B64", new_root_b64);
+
+    let mut master_key = generate_master_key();
+    let wrapped_master_key = wrap_key(&master_key, &old_root).unwrap();
+    master_key.zeroize();
+    let now = chrono::Utc::now().naive_utc();
+    let tenant = qimem::server::kms::TenantRecord {
+        id: tenant_id,
+        name: "tenant-a".to_string(),
+        wrapped_master_key: wrapped_master_key.clone(),
+        key_version: 1,
+        crypto_policy_version: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    test_db.db.insert_tenant(&tenant).await.unwrap();
+    test_db
+        .db
+        .insert_master_key_version(tenant_id, 1, &wrapped_master_key, now)
+        .await
+        .unwrap();
+
+    rotate_root_key(RootRotationOptions {
+        dry_run: false,
+        enable_destructive: true,
+        confirmation: "CONFIRM_ROOT_ROTATION_AND_DATA_REENCRYPTION".to_string(),
+    })
+    .await
+    .unwrap();
+
+    let updated = test_db
+        .db
+        .fetch_master_key_version(tenant_id, 1)
+        .await
+        .unwrap();
+    let attempt_old = unwrap_key(&updated.wrapped_master_key, &old_root);
+    assert!(attempt_old.is_err());
 }

@@ -1,7 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Qimem } from "@qimem/sdk";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
+
+function encodeBase64(input: string): string {
+  return btoa(new TextEncoder().encode(input).reduce((data, byte) => data + String.fromCharCode(byte), ""));
+}
 
 export default function Home() {
   const [tenantId, setTenantId] = useState("");
@@ -16,17 +21,72 @@ export default function Home() {
   });
   const [gatewayResponse, setGatewayResponse] = useState("");
   const [auditLog, setAuditLog] = useState("");
+  const [status, setStatus] = useState("");
 
-  const client = useMemo(() => {
-    if (!apiKey || !tenantId) return null;
-    return new Qimem({ apiKey, tenantId, baseUrl: "http://localhost:8080" });
+  const isReady = useMemo(() => apiKey.length > 0 && tenantId.length > 0, [apiKey, tenantId]);
+  const isDev = process.env.NODE_ENV !== "production";
+
+  const baseHeaders = useMemo(() => {
+    return {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "X-Tenant-ID": tenantId,
+    };
   }, [apiKey, tenantId]);
 
+  const handleCreateTenant = async () => {
+    setStatus("");
+    const response = await fetch(`${API_BASE}/v1/kms/tenants`, {
+      method: "POST",
+      headers: baseHeaders,
+      body: JSON.stringify({ name: "control-plane" }),
+    });
+    if (!response.ok) {
+      setStatus(`Create tenant failed (${response.status}).`);
+      return;
+    }
+    const data = await response.json();
+    setTenantId(data.tenant_id);
+    setStatus("Tenant created.");
+  };
+
   const handleSecurePrompt = async () => {
-    if (!client) return;
-    const encrypted = await client.encrypt(prompt);
-    setEncryptedBlob(encrypted);
-    const result = await client.securePrompt(prompt, { provider: "mock" });
+    setStatus("");
+    const encryptResponse = await fetch(`${API_BASE}/v1/kms/encrypt`, {
+      method: "POST",
+      headers: baseHeaders,
+      body: JSON.stringify({ plaintext_b64: encodeBase64(prompt) }),
+    });
+    if (!encryptResponse.ok) {
+      setStatus(`Encrypt failed (${encryptResponse.status}).`);
+      return;
+    }
+    const encrypted = await encryptResponse.json();
+    setEncryptedBlob({
+      ciphertext: encrypted.ciphertext_b64,
+      wrappedDek: encrypted.wrapped_dek_b64,
+      nonce: encrypted.nonce_b64,
+      keyVersion: encrypted.key_version,
+      algorithm: encrypted.algorithm,
+    });
+    const gatewayResponse = await fetch(`${API_BASE}/v1/gateway/proxy`, {
+      method: "POST",
+      headers: baseHeaders,
+      body: JSON.stringify({
+        provider: "mock",
+        encrypted_payload: encrypted.ciphertext_b64,
+        wrapped_dek: encrypted.wrapped_dek_b64,
+        key_version: encrypted.key_version,
+        provider_config: {},
+        nonce: encrypted.nonce_b64,
+        algorithm: encrypted.algorithm,
+      }),
+    });
+    if (!gatewayResponse.ok) {
+      setStatus(`Gateway failed (${gatewayResponse.status}).`);
+      return;
+    }
+    const result = await gatewayResponse.json();
     setGatewayResponse(JSON.stringify(result, null, 2));
     setAuditLog("decrypt • hash chain advanced");
   };
@@ -51,10 +111,12 @@ export default function Home() {
             <h2 className="panel-title">Tenant Dashboard</h2>
             <div className="panel-body">
               <p>Tenant ID: {tenantId || "unassigned"}</p>
-              <p>Master Key Version: 3</p>
+              <p>Master Key Version: {encryptedBlob.keyVersion || "-"}</p>
               <p>PQ Status: ACTIVE</p>
               <p>Last Rotation: 14m ago</p>
-              <button className="btn">Rotate Master Key</button>
+              <button className="btn" onClick={handleCreateTenant} disabled={!apiKey}>
+                Create Tenant
+              </button>
             </div>
           </div>
           <div className="panel">
@@ -106,9 +168,10 @@ export default function Home() {
                   onChange={(event) => setPrompt(event.target.value)}
                 />
               </label>
-              <button className="btn" onClick={handleSecurePrompt} disabled={!client}>
-                Encrypt Locally + Send
+              <button className="btn" onClick={handleSecurePrompt} disabled={!isReady}>
+                Encrypt + Send (Server-Side)
               </button>
+              {status && <p className="text-xs text-neutral-500">{status}</p>}
             </div>
             <div className="space-y-3">
               <div className="panel-sub">
@@ -157,6 +220,16 @@ export default function Home() {
             <button className="btn mt-4">Verify Chain</button>
           </div>
         </section>
+
+        {isDev && (
+          <section className="panel">
+            <h2 className="panel-title">Dev Panel</h2>
+            <div className="panel-body">
+              <p>API Base: {API_BASE}</p>
+              <p>Tenant override and debug toggles are disabled in production.</p>
+            </div>
+          </section>
+        )}
       </div>
     </main>
   );

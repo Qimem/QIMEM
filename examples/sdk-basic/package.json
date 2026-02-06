@@ -1,0 +1,11 @@
+{
+  "name": "qimem-sdk-basic",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@qimem/sdk": "0.1.0"
+  }
+}

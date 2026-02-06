@@ -98,6 +98,68 @@ impl DbState {
         })
     }
 
+    pub async fn fetch_all_master_key_versions(&self) -> Result<Vec<TenantKeyVersion>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT tenant_id, version, wrapped_master_key, created_at FROM tenant_master_key_versions",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| TenantKeyVersion {
+                tenant_id: row.get("tenant_id"),
+                version: row.get::<i32, _>("version") as u32,
+                wrapped_master_key: row.get("wrapped_master_key"),
+                created_at: row.get("created_at"),
+            })
+            .collect())
+    }
+
+    pub async fn update_master_key_version(
+        &self,
+        tenant_id: Uuid,
+        version: i32,
+        wrapped_master_key: &[u8],
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE tenant_master_key_versions SET wrapped_master_key = $1 WHERE tenant_id = $2 AND version = $3",
+        )
+        .bind(wrapped_master_key)
+        .bind(tenant_id)
+        .bind(version)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_tenant_wrapped_master_key(
+        &self,
+        tenant_id: Uuid,
+        wrapped_master_key: &[u8],
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE tenants SET wrapped_master_key = $1 WHERE id = $2")
+            .bind(wrapped_master_key)
+            .bind(tenant_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn update_tenant_wrapped_master_key_for_version(
+        &self,
+        tenant_id: Uuid,
+        key_version: i32,
+        wrapped_master_key: &[u8],
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE tenants SET wrapped_master_key = $1 WHERE id = $2 AND key_version = $3")
+            .bind(wrapped_master_key)
+            .bind(tenant_id)
+            .bind(key_version)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn update_tenant_key_version(
         &self,
         tenant_id: Uuid,
@@ -165,5 +227,27 @@ impl DbState {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|value| value.get("event_hash")))
+    }
+
+    pub async fn insert_root_key_rotation(
+        &self,
+        id: Uuid,
+        started_at: chrono::NaiveDateTime,
+        completed_at: Option<chrono::NaiveDateTime>,
+        tenant_count: i32,
+        dry_run: bool,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO root_key_rotations (id, started_at, completed_at, tenant_count, dry_run)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(id)
+        .bind(started_at)
+        .bind(completed_at)
+        .bind(tenant_count)
+        .bind(dry_run)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }

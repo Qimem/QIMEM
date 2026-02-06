@@ -33,3 +33,11 @@ CREATE TABLE audit_logs (
   metadata JSONB,
   created_at TIMESTAMP NOT NULL
 );
+
+CREATE TABLE root_key_rotations (
+  id UUID PRIMARY KEY,
+  started_at TIMESTAMP NOT NULL,
+  completed_at TIMESTAMP,
+  tenant_count INT NOT NULL,
+  dry_run BOOLEAN NOT NULL
+);
