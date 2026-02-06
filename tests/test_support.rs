@@ -1,4 +1,5 @@
 use sqlx::PgPool;
+use std::process::Command;
 use testcontainers::clients::Cli;
 use testcontainers::core::WaitFor;
 use testcontainers::{Container, GenericImage};
@@ -9,6 +10,14 @@ pub struct TestDb<'a> {
     _container: Container<'a, GenericImage>,
     pub db: DbState,
     pub database_url: String,
+}
+
+pub fn docker_available() -> bool {
+    Command::new("docker")
+        .arg("info")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 pub async fn setup_test_db<'a>() -> TestDb<'a> {

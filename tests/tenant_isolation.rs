@@ -20,6 +20,10 @@ struct Claims {
 
 #[tokio::test]
 async fn test_tenant_header_mismatch_rejected() {
+    if !test_support::docker_available() {
+        eprintln!("Skipping test_tenant_header_mismatch_rejected: Docker not available.");
+        return;
+    }
     let test_db = test_support::setup_test_db().await;
     let auth = AuthConfig {
         jwt_secret: "test-secret".to_string(),

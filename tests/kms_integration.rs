@@ -15,6 +15,10 @@ mod test_support;
 
 #[tokio::test]
 async fn test_encrypt_rotate_decrypt() {
+    if !test_support::docker_available() {
+        eprintln!("Skipping test_encrypt_rotate_decrypt: Docker not available.");
+        return;
+    }
     let test_db = test_support::setup_test_db().await;
     let tenant_id = uuid::Uuid::new_v4();
     let mut root_key = [7u8; 32];
@@ -74,6 +78,10 @@ async fn test_encrypt_rotate_decrypt() {
 
 #[tokio::test]
 async fn test_cross_tenant_isolation() {
+    if !test_support::docker_available() {
+        eprintln!("Skipping test_cross_tenant_isolation: Docker not available.");
+        return;
+    }
     let test_db = test_support::setup_test_db().await;
     let tenant_a = uuid::Uuid::new_v4();
     let tenant_b = uuid::Uuid::new_v4();
@@ -195,6 +203,10 @@ async fn test_root_rotation_requires_confirmation() {
 
 #[tokio::test]
 async fn test_root_rotation_rewraps_keys() {
+    if !test_support::docker_available() {
+        eprintln!("Skipping test_root_rotation_rewraps_keys: Docker not available.");
+        return;
+    }
     let test_db = test_support::setup_test_db().await;
     let tenant_id = uuid::Uuid::new_v4();
     let old_root = [1u8; 32];
