@@ -1,19 +1,28 @@
 use sqlx::PgPool;
 use testcontainers::clients::Cli;
-use testcontainers::images::postgres::Postgres;
-use testcontainers::Container;
+use testcontainers::core::WaitFor;
+use testcontainers::{Container, GenericImage};
 
 use qimem::server::db::DbState;
 
 pub struct TestDb<'a> {
-    _container: Container<'a, Postgres>,
+    _container: Container<'a, GenericImage>,
     pub db: DbState,
     pub database_url: String,
 }
 
 pub async fn setup_test_db<'a>() -> TestDb<'a> {
     let docker = Box::leak(Box::new(Cli::default()));
-    let container = docker.run(Postgres::default());
+    let container = docker.run(
+        GenericImage::new("postgres", "15-alpine")
+            .with_env_var("POSTGRES_PASSWORD", "postgres")
+            .with_env_var("POSTGRES_USER", "postgres")
+            .with_env_var("POSTGRES_DB", "postgres")
+            .with_exposed_port(5432)
+            .with_wait_for(WaitFor::message_on_stdout(
+                "database system is ready to accept connections",
+            )),
+    );
     let port = container.get_host_port_ipv4(5432);
     let database_url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", port);
     let pool = PgPool::connect(&database_url).await.expect("connect db");

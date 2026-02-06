@@ -44,7 +44,7 @@ async fn test_encrypt_rotate_decrypt() {
     let mut nonce_bytes = [0u8; 12];
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce_bytes), b"secret payload")
+        .encrypt(Nonce::from_slice(&nonce_bytes), b"secret payload".as_slice())
         .unwrap();
     let wrapped_dek = wrap_key(&dek, &unwrap_key(&wrapped_master_key, &root_key).unwrap()).unwrap();
 

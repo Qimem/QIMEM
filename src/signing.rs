@@ -50,3 +50,17 @@ pub fn verify_signature_bytes(public_key: &[u8], message: &[u8], signature: &[u8
     let signature = Signature::try_from(signature_array).map_err(|_| "Invalid signature")?;
     Ok(verifying_key.verify(message, &signature).is_ok())
 }
+
+pub fn generate_keypair_bytes() -> (Vec<u8>, Vec<u8>) {
+    let mut csprng = OsRng;
+    let signing_key = SigningKey::generate(&mut csprng);
+    let verifying_key = signing_key.verifying_key();
+    (verifying_key.as_bytes().to_vec(), signing_key.as_bytes().to_vec())
+}
+
+pub fn public_key_from_secret(secret_key: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let secret_key_array: [u8; 32] = secret_key.try_into().map_err(|_| "Secret key must be 32 bytes")?;
+    let signing_key = SigningKey::from_bytes(&secret_key_array);
+    let verifying_key = signing_key.verifying_key();
+    Ok(verifying_key.as_bytes().to_vec())
+}

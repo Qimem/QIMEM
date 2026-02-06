@@ -345,6 +345,17 @@ impl KmsService {
         })
     }
 
+    pub async fn list_audit_logs(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<AuditLogEntry>, KmsError> {
+        self.db
+            .fetch_audit_logs(tenant_id, limit)
+            .await
+            .map_err(|_| KmsError::CryptoError)
+    }
+
     pub async fn store_pq_keypair(
         &self,
         tenant_id: Uuid,
@@ -538,6 +549,7 @@ pub struct RootRotationOptions {
     pub confirmation: String,
 }
 
+#[derive(Debug)]
 pub struct RootRotationSummary {
     pub rotation_id: Uuid,
     pub tenant_count: usize,

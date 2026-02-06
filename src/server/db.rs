@@ -229,6 +229,36 @@ impl DbState {
         Ok(row.map(|value| value.get("event_hash")))
     }
 
+    pub async fn fetch_audit_logs(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<AuditLogEntry>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, tenant_id, event_type, event_hash, prev_hash, metadata, created_at
+             FROM audit_logs WHERE tenant_id = $1
+             ORDER BY created_at DESC
+             LIMIT $2",
+        )
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| AuditLogEntry {
+                id: row.get("id"),
+                tenant_id: row.get("tenant_id"),
+                event_type: row.get("event_type"),
+                event_hash: row.get("event_hash"),
+                prev_hash: row.get("prev_hash"),
+                metadata: row.get("metadata"),
+                created_at: row.get("created_at"),
+            })
+            .collect())
+    }
+
     pub async fn insert_root_key_rotation(
         &self,
         id: Uuid,

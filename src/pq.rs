@@ -151,3 +151,11 @@ pub fn hybrid_session(
         ciphertext,
     ))
 }
+
+pub fn generate_x25519_keypair() -> (Vec<u8>, Vec<u8>) {
+    let mut secret_bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut secret_bytes);
+    let secret = StaticSecret::from(secret_bytes);
+    let public = PublicKey::from(&secret);
+    (public.as_bytes().to_vec(), secret.to_bytes().to_vec())
+}

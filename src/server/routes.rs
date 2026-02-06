@@ -1,4 +1,4 @@
-use axum::extract::{FromRef, State};
+use axum::extract::{FromRef, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
@@ -61,7 +61,11 @@ pub fn router(state: AppState) -> Router {
             "/v1/kms/rotate-master-key",
             axum::routing::post(rotate_master_key),
         )
+        .route("/v1/kms/sign", axum::routing::post(kms_sign))
+        .route("/v1/kms/verify", axum::routing::post(kms_verify))
+        .route("/v1/kms/audit", axum::routing::get(kms_audit_logs))
         .route("/v1/kms/pq/keypair", axum::routing::post(kms_pq_keypair))
+        .route("/v1/kms/pq/x25519", axum::routing::post(kms_pq_x25519))
         .route("/v1/kms/pq/session", axum::routing::post(kms_pq_session))
         .with_state(state)
 }
@@ -433,6 +437,129 @@ async fn rotate_master_key(
 }
 
 #[derive(Deserialize)]
+struct KmsSignRequest {
+    message_b64: String,
+    secret_key_b64: Option<String>,
+}
+
+#[derive(Serialize)]
+struct KmsSignResponse {
+    signature_b64: String,
+    public_key_b64: String,
+}
+
+async fn kms_sign(
+    State(_state): State<AppState>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Json(payload): Json<KmsSignRequest>,
+) -> Result<Json<KmsSignResponse>, ApiError> {
+    require_scope(&user, "kms:sign")?;
+    extract_tenant_id(&headers, &user)?;
+    let message = STANDARD
+        .decode(payload.message_b64)
+        .map_err(|_| ApiError::InvalidInput("Invalid message base64"))?;
+    let (public_key, secret_key) = match payload.secret_key_b64 {
+        Some(secret_key_b64) => {
+            let secret_key = STANDARD
+                .decode(secret_key_b64)
+                .map_err(|_| ApiError::InvalidInput("Invalid secret key base64"))?;
+            let public_key = signing::public_key_from_secret(&secret_key)
+                .map_err(|_| ApiError::InvalidInput("Invalid secret key"))?;
+            (public_key, secret_key)
+        }
+        None => signing::generate_keypair_bytes(),
+    };
+    let signature = signing::sign_message_bytes(&secret_key, &message)
+        .map_err(|_| ApiError::Crypto("Signing failed"))?;
+    Ok(Json(KmsSignResponse {
+        signature_b64: STANDARD.encode(signature),
+        public_key_b64: STANDARD.encode(public_key),
+    }))
+}
+
+#[derive(Deserialize)]
+struct KmsVerifyRequest {
+    message_b64: String,
+    public_key_b64: String,
+    signature_b64: String,
+}
+
+#[derive(Serialize)]
+struct KmsVerifyResponse {
+    valid: bool,
+}
+
+async fn kms_verify(
+    State(_state): State<AppState>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Json(payload): Json<KmsVerifyRequest>,
+) -> Result<Json<KmsVerifyResponse>, ApiError> {
+    require_scope(&user, "kms:verify")?;
+    extract_tenant_id(&headers, &user)?;
+    let message = STANDARD
+        .decode(payload.message_b64)
+        .map_err(|_| ApiError::InvalidInput("Invalid message base64"))?;
+    let public_key = STANDARD
+        .decode(payload.public_key_b64)
+        .map_err(|_| ApiError::InvalidInput("Invalid public key base64"))?;
+    let signature = STANDARD
+        .decode(payload.signature_b64)
+        .map_err(|_| ApiError::InvalidInput("Invalid signature base64"))?;
+    let valid = signing::verify_signature_bytes(&public_key, &message, &signature)
+        .map_err(|_| ApiError::Crypto("Verification failed"))?;
+    Ok(Json(KmsVerifyResponse { valid }))
+}
+
+#[derive(Deserialize)]
+struct AuditQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct AuditLogEntryResponse {
+    id: String,
+    tenant_id: String,
+    event_type: String,
+    event_hash_b64: String,
+    prev_hash_b64: Option<String>,
+    metadata: serde_json::Value,
+    created_at: u64,
+}
+
+async fn kms_audit_logs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Query(query): Query<AuditQuery>,
+) -> Result<Json<Vec<AuditLogEntryResponse>>, ApiError> {
+    require_scope(&user, "kms:audit:read")?;
+    let tenant_id = extract_tenant_id(&headers, &user)?;
+    let limit = query.limit.unwrap_or(25).min(100) as i64;
+    let mut logs = state
+        .kms
+        .list_audit_logs(tenant_id, limit)
+        .await
+        .map_err(ApiError::from)?;
+    logs.reverse();
+    Ok(Json(
+        logs
+            .into_iter()
+            .map(|entry| AuditLogEntryResponse {
+                id: entry.id.to_string(),
+                tenant_id: entry.tenant_id.to_string(),
+                event_type: entry.event_type,
+                event_hash_b64: STANDARD.encode(entry.event_hash),
+                prev_hash_b64: entry.prev_hash.map(|hash| STANDARD.encode(hash)),
+                metadata: entry.metadata,
+                created_at: entry.created_at.and_utc().timestamp() as u64,
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Deserialize)]
 struct PqKeypairRequest {
     algorithm: Option<String>,
 }
@@ -469,6 +596,24 @@ async fn kms_pq_keypair(
         algorithm: keypair.algorithm.to_string(),
         version: 1,
         public_key_b64: STANDARD.encode(keypair.public_key),
+    }))
+}
+
+#[derive(Serialize)]
+struct PqX25519Response {
+    public_key_b64: String,
+}
+
+async fn kms_pq_x25519(
+    State(_state): State<AppState>,
+    headers: HeaderMap,
+    user: AuthUser,
+) -> Result<Json<PqX25519Response>, ApiError> {
+    require_scope(&user, "kms:pq:session")?;
+    extract_tenant_id(&headers, &user)?;
+    let (public_key, _secret_key) = pq::generate_x25519_keypair();
+    Ok(Json(PqX25519Response {
+        public_key_b64: STANDARD.encode(public_key),
     }))
 }
 
