@@ -68,13 +68,16 @@ struct Claims {
     exp: usize,
     iss: Option<String>,
     aud: Option<String>,
+    tenant_id: Option<String>,
+    scopes: Option<Vec<String>>,
     scope: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct AuthUser {
     pub subject: String,
-    pub scope: Option<String>,
+    pub tenant_id: Option<String>,
+    pub scopes: Vec<String>,
 }
 
 #[async_trait]
@@ -90,7 +93,8 @@ where
         if auth_config.auth_disabled {
             return Ok(AuthUser {
                 subject: "anonymous".to_string(),
-                scope: None,
+                tenant_id: None,
+                scopes: Vec::new(),
             });
         }
         let header_value = parts
@@ -119,9 +123,21 @@ where
         )
         .map_err(|_| AuthError::InvalidToken)?;
 
+        let mut scopes = decoded.claims.scopes.unwrap_or_default();
+        if scopes.is_empty() {
+            if let Some(scope) = decoded.claims.scope {
+                scopes = scope
+                    .split_whitespace()
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_string())
+                    .collect();
+            }
+        }
+
         Ok(AuthUser {
             subject: decoded.claims.sub,
-            scope: decoded.claims.scope,
+            tenant_id: decoded.claims.tenant_id,
+            scopes,
         })
     }
 }
