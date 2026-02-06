@@ -1,0 +1,208 @@
+use std::env;
+use std::net::SocketAddr;
+
+use axum::extract::{FromRef, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::{routing::post, Json, Router};
+use reqwest::header::HeaderMap as ReqwestHeaderMap;
+use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
+use uuid::Uuid;
+use zeroize::Zeroize;
+
+use qimem::server::auth::{AuthConfig, AuthError, AuthUser};
+use qimem::server::KmsService;
+
+#[derive(Clone, Debug)]
+struct GatewayState {
+    auth: AuthConfig,
+    kms: KmsService,
+}
+
+impl FromRef<GatewayState> for AuthConfig {
+    fn from_ref(input: &GatewayState) -> Self {
+        input.auth.clone()
+    }
+}
+
+#[derive(Deserialize)]
+struct ProxyRequest {
+    provider: String,
+    encrypted_payload: String,
+    wrapped_dek: String,
+    key_version: u32,
+    provider_config: ProviderConfig,
+    nonce: String,
+    algorithm: String,
+}
+
+#[derive(Deserialize)]
+struct ProviderConfig {
+    endpoint: Option<String>,
+    headers: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Serialize)]
+struct ProxyResponse {
+    provider: String,
+    response: String,
+}
+
+#[tokio::main]
+async fn main() {
+    let host = env::var("QIMEM_GATEWAY_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let port: u16 = env::var("QIMEM_GATEWAY_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(8081);
+
+    let auth = AuthConfig::from_env().expect("Missing Better Auth configuration");
+    let kms = KmsService::from_env()
+        .await
+        .expect("Missing KMS configuration");
+
+    let state = GatewayState { auth, kms };
+
+    let app = Router::new()
+        .route("/v1/gateway/proxy", post(proxy_handler))
+        .with_state(state);
+
+    let addr: SocketAddr = format!("{}:{}", host, port)
+        .parse()
+        .expect("Invalid host/port");
+    println!("QIMEM Gateway listening on {}", addr);
+
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .expect("Failed to bind");
+    axum::serve(listener, app).await.expect("Server error");
+}
+
+async fn proxy_handler(
+    State(state): State<GatewayState>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Json(payload): Json<ProxyRequest>,
+) -> Result<Json<ProxyResponse>, GatewayError> {
+    let tenant_id = extract_tenant_id(&headers, &user)?;
+    let algorithm_ok = payload
+        .algorithm
+        .as_bytes()
+        .ct_eq(b"chacha20poly1305")
+        .unwrap_u8()
+        == 1;
+    if !algorithm_ok {
+        return Err(GatewayError::InvalidInput("Unsupported algorithm"));
+    }
+    let plaintext = state
+        .kms
+        .decrypt_for_gateway(
+            tenant_id,
+            payload.wrapped_dek.clone(),
+            payload.encrypted_payload.clone(),
+            payload.nonce.clone(),
+            payload.algorithm.clone(),
+            payload.key_version,
+        )
+        .await
+        .map_err(|_| GatewayError::Crypto("Decryption failed"))?;
+
+    let provider_response = match payload.provider.as_str() {
+        "mock" => {
+            let mut reversed = plaintext.clone();
+            reversed.reverse();
+            String::from_utf8_lossy(&reversed).to_string()
+        }
+        "custom" => {
+            let endpoint = payload
+                .provider_config
+                .endpoint
+                .ok_or(GatewayError::InvalidInput("Missing provider endpoint"))?;
+            let mut req_headers = ReqwestHeaderMap::new();
+            if let Some(headers) = payload.provider_config.headers {
+                for (key, value) in headers {
+                    if let Some(value_str) = value.as_str() {
+                        req_headers.insert(
+                            reqwest::header::HeaderName::from_bytes(key.as_bytes())
+                                .map_err(|_| GatewayError::InvalidInput("Invalid header name"))?,
+                            reqwest::header::HeaderValue::from_str(value_str)
+                                .map_err(|_| GatewayError::InvalidInput("Invalid header value"))?,
+                        );
+                    }
+                }
+            }
+            let client = reqwest::Client::new();
+            let response = client
+                .post(endpoint)
+                .headers(req_headers)
+                .body(plaintext.clone())
+                .send()
+                .await
+                .map_err(|_| GatewayError::Crypto("Provider request failed"))?;
+            response
+                .text()
+                .await
+                .map_err(|_| GatewayError::Crypto("Provider response failed"))?
+        }
+        _ => return Err(GatewayError::InvalidInput("Unsupported provider")),
+    };
+
+    state
+        .kms
+        .log_gateway_decrypt(
+            tenant_id,
+            serde_json::json!({
+                "provider": payload.provider,
+                "key_version": payload.key_version,
+            }),
+        )
+        .await
+        .map_err(|_| GatewayError::Crypto("Audit write failed"))?;
+
+    let mut plaintext_zeroize = plaintext;
+    plaintext_zeroize.zeroize();
+
+    Ok(Json(ProxyResponse {
+        provider: payload.provider,
+        response: provider_response,
+    }))
+}
+
+fn extract_tenant_id(headers: &HeaderMap, user: &AuthUser) -> Result<Uuid, GatewayError> {
+    let header_value = headers
+        .get("x-tenant-id")
+        .ok_or(GatewayError::Auth(AuthError::MissingAuthorization))?
+        .to_str()
+        .map_err(|_| GatewayError::InvalidInput("Invalid tenant header"))?;
+    let tenant_id = Uuid::parse_str(header_value)
+        .map_err(|_| GatewayError::InvalidInput("Invalid tenant id"))?;
+    let user_tenant = user
+        .tenant_id
+        .as_ref()
+        .ok_or(GatewayError::Auth(AuthError::InvalidToken))?;
+    let user_tenant_id =
+        Uuid::parse_str(user_tenant).map_err(|_| GatewayError::InvalidInput("Invalid tenant id"))?;
+    if tenant_id.as_bytes().ct_eq(user_tenant_id.as_bytes()).unwrap_u8() != 1 {
+        return Err(GatewayError::Auth(AuthError::InvalidToken));
+    }
+    Ok(tenant_id)
+}
+
+#[derive(Debug)]
+enum GatewayError {
+    InvalidInput(&'static str),
+    Crypto(&'static str),
+    Auth(AuthError),
+}
+
+impl IntoResponse for GatewayError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            GatewayError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
+            GatewayError::Crypto(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            GatewayError::Auth(_) => (StatusCode::UNAUTHORIZED, "Unauthorized"),
+        };
+        (status, Json(serde_json::json!({"error": message}))).into_response()
+    }
+}
