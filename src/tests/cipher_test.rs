@@ -1,8 +1,8 @@
+use crate::q_core::{decrypt, decrypt_simple, encrypt, encrypt_simple};
 use crate::q_keygen::derive_key;
-use crate::q_core::{decrypt, encrypt, decrypt_simple, encrypt_simple};
 use crate::tests::init_python;
-use pyo3::Python;
 use pyo3::types::PyBytesMethods;
+use pyo3::Python;
 
 #[test]
 fn test_encrypt_decrypt() {

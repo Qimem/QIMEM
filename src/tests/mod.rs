@@ -41,7 +41,9 @@ mod keystore_test {
             // 1. Create a new keystore and store a key
             let mut keystore = KeyStore::new(py, path, "very-strong-password").unwrap();
             let original_key = [42; 32];
-            keystore.store_key(py, "my-test-key", &original_key).unwrap();
+            keystore
+                .store_key(py, "my-test-key", &original_key)
+                .unwrap();
 
             // 2. Create a new instance from the saved file
             let loaded_keystore = KeyStore::new(py, path, "very-strong-password").unwrap();

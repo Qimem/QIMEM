@@ -1,10 +1,14 @@
-use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+#![allow(dead_code)]
+#![allow(clippy::useless_conversion)]
+// Needed for PyO3 macro-generated signatures that trigger Clippy false positives in this crate.
+
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
     ChaCha20Poly1305, Nonce,
 };
 use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use rand::RngCore;
 
 #[derive(thiserror::Error, Debug)]
@@ -13,12 +17,6 @@ pub enum QCoreError {
     EncryptionFailed,
     #[error("Decryption failed")]
     DecryptionFailed,
-}
-
-impl From<QCoreError> for PyErr {
-    fn from(err: QCoreError) -> PyErr {
-        PyValueError::new_err(err.to_string())
-    }
 }
 
 #[pyfunction]
@@ -32,14 +30,18 @@ pub fn encrypt<'py>(py: Python<'py>, data: &[u8], key: &[u8]) -> PyResult<Bound<
     let nonce = Nonce::from_slice(&nonce);
     let ciphertext = cipher
         .encrypt(nonce, data)
-        .map_err(|_| QCoreError::EncryptionFailed)?;
+        .map_err(|_| PyValueError::new_err(QCoreError::EncryptionFailed.to_string()))?;
     let mut output = nonce.to_vec();
     output.extend_from_slice(&ciphertext);
     Ok(PyBytes::new_bound(py, &output))
 }
 
 #[pyfunction]
-pub fn decrypt<'py>(py: Python<'py>, encrypted: &[u8], key: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+pub fn decrypt<'py>(
+    py: Python<'py>,
+    encrypted: &[u8],
+    key: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
     let key_array: [u8; 32] = key
         .try_into()
         .map_err(|_| PyValueError::new_err("Key must be 32 bytes"))?;
@@ -51,7 +53,7 @@ pub fn decrypt<'py>(py: Python<'py>, encrypted: &[u8], key: &[u8]) -> PyResult<B
     let cipher = ChaCha20Poly1305::new(&key_array.into());
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
-        .map_err(|_| QCoreError::DecryptionFailed)?;
+        .map_err(|_| PyValueError::new_err(QCoreError::DecryptionFailed.to_string()))?;
     Ok(PyBytes::new_bound(py, &plaintext))
 }
 

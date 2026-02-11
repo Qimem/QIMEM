@@ -30,6 +30,10 @@ pub enum KmsError {
     KeyVersionNotFound,
     #[error("crypto error")]
     CryptoError,
+    #[error("missing database configuration")]
+    MissingDatabaseUrl,
+    #[error("database error")]
+    DatabaseError,
     #[error("root rotation not enabled")]
     RotationNotEnabled,
     #[error("root rotation confirmation missing")]
@@ -65,7 +69,9 @@ struct RootKey {
 
 impl std::fmt::Debug for RootKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RootKey").field("bytes", &"<redacted>").finish()
+        f.debug_struct("RootKey")
+            .field("bytes", &"<redacted>")
+            .finish()
     }
 }
 
@@ -111,10 +117,12 @@ impl KmsService {
     pub async fn from_env() -> Result<Self, KmsError> {
         let source = RootKeySource::from_env()?;
         let root_key = RootKey::load(RootKeyConfig { source })?;
-        let database_url = env::var("QIMEM_DATABASE_URL").map_err(|_| KmsError::CryptoError)?;
+        let database_url = env::var("DATABASE_URL")
+            .or_else(|_| env::var("QIMEM_DATABASE_URL"))
+            .map_err(|_| KmsError::MissingDatabaseUrl)?;
         let db = DbState::connect(&database_url)
             .await
-            .map_err(|_| KmsError::CryptoError)?;
+            .map_err(|_| KmsError::DatabaseError)?;
         Ok(Self { db, root_key })
     }
 
@@ -171,7 +179,8 @@ impl KmsService {
             .fetch_master_key_version(tenant_id, tenant.key_version as i64)
             .await
             .map_err(|_| KmsError::KeyVersionNotFound)?;
-        let mut master_key = unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
+        let mut master_key =
+            unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
         let mut dek = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut dek);
         let plaintext = STANDARD
@@ -220,7 +229,8 @@ impl KmsService {
             .fetch_master_key_version(tenant_id, request.key_version as i64)
             .await
             .map_err(|_| KmsError::KeyVersionNotFound)?;
-        let mut master_key = unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
+        let mut master_key =
+            unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
         let algorithm_ok = request
             .algorithm
             .as_bytes()
@@ -261,7 +271,11 @@ impl KmsService {
         Ok(plaintext)
     }
 
-    pub async fn wrap_dek(&self, tenant_id: Uuid, dek_b64: String) -> Result<WrapDekResponse, KmsError> {
+    pub async fn wrap_dek(
+        &self,
+        tenant_id: Uuid,
+        dek_b64: String,
+    ) -> Result<WrapDekResponse, KmsError> {
         let tenant = self
             .db
             .fetch_tenant(tenant_id)
@@ -272,7 +286,8 @@ impl KmsService {
             .fetch_master_key_version(tenant_id, tenant.key_version as i64)
             .await
             .map_err(|_| KmsError::KeyVersionNotFound)?;
-        let mut master_key = unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
+        let mut master_key =
+            unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
         let mut dek = STANDARD
             .decode(dek_b64)
             .map_err(|_| KmsError::InvalidInput)?;
@@ -301,7 +316,8 @@ impl KmsService {
             .fetch_master_key_version(tenant_id, key_version as i64)
             .await
             .map_err(|_| KmsError::KeyVersionNotFound)?;
-        let mut master_key = unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
+        let mut master_key =
+            unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
         let wrapped_dek = STANDARD
             .decode(wrapped_dek_b64)
             .map_err(|_| KmsError::InvalidInput)?;
@@ -310,7 +326,10 @@ impl KmsService {
         Ok(Zeroizing::new(dek))
     }
 
-    pub async fn rotate_master_key(&self, tenant_id: Uuid) -> Result<RotateMasterKeyResponse, KmsError> {
+    pub async fn rotate_master_key(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<RotateMasterKeyResponse, KmsError> {
         let tenant = self
             .db
             .fetch_tenant(tenant_id)
@@ -378,7 +397,8 @@ impl KmsService {
             .fetch_master_key_version(tenant_id, tenant.key_version as i64)
             .await
             .map_err(|_| KmsError::KeyVersionNotFound)?;
-        let mut master_key = unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
+        let mut master_key =
+            unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
         let wrapped_private_key = wrap_key(secret_key, &master_key)?;
         master_key.zeroize();
         let now = chrono::Utc::now().naive_utc();
@@ -404,7 +424,11 @@ impl KmsService {
         Ok(())
     }
 
-    pub async fn log_gateway_decrypt(&self, tenant_id: Uuid, metadata: serde_json::Value) -> Result<(), KmsError> {
+    pub async fn log_gateway_decrypt(
+        &self,
+        tenant_id: Uuid,
+        metadata: serde_json::Value,
+    ) -> Result<(), KmsError> {
         let prev_hash = self
             .db
             .fetch_latest_audit_hash(tenant_id)
@@ -437,15 +461,22 @@ impl KmsService {
             .fetch_master_key_version(tenant_id, key_version as i64)
             .await
             .map_err(|_| KmsError::KeyVersionNotFound)?;
-        let mut master_key = unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
+        let mut master_key =
+            unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
         let algorithm_ok = algorithm.as_bytes().ct_eq(b"chacha20poly1305").unwrap_u8() == 1;
         if !algorithm_ok {
             return Err(KmsError::InvalidAlgorithm);
         }
-        let wrapped_dek = STANDARD.decode(wrapped_dek_b64).map_err(|_| KmsError::InvalidInput)?;
+        let wrapped_dek = STANDARD
+            .decode(wrapped_dek_b64)
+            .map_err(|_| KmsError::InvalidInput)?;
         let mut dek = unwrap_key(&wrapped_dek, &master_key)?;
-        let ciphertext = STANDARD.decode(ciphertext_b64).map_err(|_| KmsError::InvalidInput)?;
-        let nonce = STANDARD.decode(nonce_b64).map_err(|_| KmsError::InvalidInput)?;
+        let ciphertext = STANDARD
+            .decode(ciphertext_b64)
+            .map_err(|_| KmsError::InvalidInput)?;
+        let nonce = STANDARD
+            .decode(nonce_b64)
+            .map_err(|_| KmsError::InvalidInput)?;
         let plaintext = decrypt_payload(&ciphertext, &nonce, &dek)?;
         dek.zeroize();
         master_key.zeroize();
@@ -566,7 +597,9 @@ pub struct RootRotationSummary {
     pub dry_run: bool,
 }
 
-pub async fn rotate_root_key(options: RootRotationOptions) -> Result<RootRotationSummary, KmsError> {
+pub async fn rotate_root_key(
+    options: RootRotationOptions,
+) -> Result<RootRotationSummary, KmsError> {
     if !options.enable_destructive {
         return Err(KmsError::RotationNotEnabled);
     }
@@ -577,10 +610,12 @@ pub async fn rotate_root_key(options: RootRotationOptions) -> Result<RootRotatio
     let old_root = RootKey::load(RootKeyConfig { source })?;
     let new_root_b64 = env::var("QIMEM_NEW_ROOT_KEY_B64").map_err(|_| KmsError::MissingRootKey)?;
     let new_root = RootKey::from_env_override(&new_root_b64)?;
-    let database_url = env::var("QIMEM_DATABASE_URL").map_err(|_| KmsError::CryptoError)?;
+    let database_url = env::var("DATABASE_URL")
+        .or_else(|_| env::var("QIMEM_DATABASE_URL"))
+        .map_err(|_| KmsError::MissingDatabaseUrl)?;
     let db = DbState::connect(&database_url)
         .await
-        .map_err(|_| KmsError::CryptoError)?;
+        .map_err(|_| KmsError::DatabaseError)?;
     let versions = db
         .fetch_all_master_key_versions()
         .await

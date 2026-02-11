@@ -1,9 +1,11 @@
 use std::env;
 
+use dotenvy::dotenv;
 use qimem::server::root_rotation::execute_root_rotation;
 
 #[tokio::main]
 async fn main() {
+    dotenv().ok();
     let dry_run = env::args().any(|arg| arg == "--dry-run");
     let enable_destructive = env::var("ENABLE_DESTRUCTIVE_ROTATION")
         .map(|value| value == "true" || value == "1")

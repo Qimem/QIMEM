@@ -1,14 +1,14 @@
+use crate::q_core::{decrypt, encrypt, QCoreError};
+use argon2::{Algorithm, Argon2, Params, Version};
+use bincode;
+use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytesMethods;
-use crate::q_core::{encrypt, decrypt, QCoreError};
+use rand::RngCore;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
-use bincode;
-use pyo3::exceptions::{PyValueError, PyIOError};
-use argon2::{Argon2, Algorithm, Version, Params};
-use rand::RngCore;
 
 #[derive(thiserror::Error, Debug)]
 pub enum KeyStoreError {
@@ -35,9 +35,12 @@ impl KeyStore {
     #[new]
     pub fn new(py: Python<'_>, path: &str, master_password: &str) -> PyResult<Self> {
         let (keys, master_key, salt) = if Path::new(path).exists() {
-            let mut encrypted_file = File::open(path).map_err(|e| PyIOError::new_err(e.to_string()))?;
+            let mut encrypted_file =
+                File::open(path).map_err(|e| PyIOError::new_err(e.to_string()))?;
             let mut encrypted_data = Vec::new();
-            encrypted_file.read_to_end(&mut encrypted_data).map_err(|e| PyIOError::new_err(e.to_string()))?;
+            encrypted_file
+                .read_to_end(&mut encrypted_data)
+                .map_err(|e| PyIOError::new_err(e.to_string()))?;
             if encrypted_data.len() < 16 {
                 return Err(PyValueError::new_err("Invalid keystore data"));
             }
@@ -47,7 +50,8 @@ impl KeyStore {
             let master_key = derive_master_key(master_password, &salt)?;
             let decrypted_bound = decrypt(py, &encrypted_data[16..], &master_key)?;
             let decrypted_data = decrypted_bound.as_bytes();
-            let keys = bincode::deserialize(decrypted_data).map_err(|e| PyValueError::new_err(e.to_string()))?;
+            let keys = bincode::deserialize(decrypted_data)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
             (keys, master_key, salt)
         } else {
             let mut salt = [0u8; 16];
@@ -64,11 +68,15 @@ impl KeyStore {
     }
 
     pub fn store_key(&mut self, py: Python<'_>, id: &str, key: &[u8]) -> PyResult<()> {
-        let key_array: [u8; 32] = key.try_into().map_err(|_| PyValueError::new_err("Key must be 32 bytes"))?;
+        let key_array: [u8; 32] = key
+            .try_into()
+            .map_err(|_| PyValueError::new_err("Key must be 32 bytes"))?;
         self.keys.insert(id.to_string(), key_array);
-        let serialized_data = bincode::serialize(&self.keys).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let serialized_data =
+            bincode::serialize(&self.keys).map_err(|e| PyValueError::new_err(e.to_string()))?;
         let encrypted_bound = encrypt(py, &serialized_data, &self.master_key)?;
-        let mut encrypted_data = Vec::with_capacity(self.salt.len() + encrypted_bound.as_bytes().len());
+        let mut encrypted_data =
+            Vec::with_capacity(self.salt.len() + encrypted_bound.as_bytes().len());
         encrypted_data.extend_from_slice(&self.salt);
         encrypted_data.extend_from_slice(encrypted_bound.as_bytes());
         fs::write(&self.path, encrypted_data).map_err(|e| PyIOError::new_err(e.to_string()))?;
@@ -81,8 +89,8 @@ impl KeyStore {
 }
 
 fn derive_master_key(master_password: &str, salt: &[u8; 16]) -> PyResult<[u8; 32]> {
-    let params = Params::new(32768, 4, 1, Some(32))
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let params =
+        Params::new(32768, 4, 1, Some(32)).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = [0u8; 32];
     argon2

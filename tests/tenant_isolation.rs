@@ -14,6 +14,8 @@ mod test_support;
 struct Claims {
     sub: String,
     exp: usize,
+    iss: String,
+    aud: String,
     tenant_id: String,
     scopes: Vec<String>,
 }
@@ -27,8 +29,9 @@ async fn test_tenant_header_mismatch_rejected() {
     let test_db = test_support::setup_test_db().await;
     let auth = AuthConfig {
         jwt_secret: "test-secret".to_string(),
-        issuer: None,
-        audience: None,
+        issuer: "qimem".to_string(),
+        audience: "qimem-users".to_string(),
+        mfa_totp_secret: None,
         auth_disabled: false,
     };
     let policy = PolicyConfig::from_env();
@@ -43,6 +46,8 @@ async fn test_tenant_header_mismatch_rejected() {
     let claims = Claims {
         sub: "user".to_string(),
         exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize,
+        iss: "qimem".to_string(),
+        aud: "qimem-users".to_string(),
         tenant_id: tenant_a.to_string(),
         scopes: vec!["kms:decrypt".to_string()],
     };

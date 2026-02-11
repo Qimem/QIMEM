@@ -49,18 +49,40 @@ struct ProxyResponse {
     response: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum GatewayStartupError {
+    #[error("Missing QIMEM authentication configuration: {0}")]
+    Auth(#[from] AuthError),
+    #[error("Missing or invalid KMS configuration")]
+    Kms,
+    #[error("Invalid host/port")]
+    Addr,
+    #[error("Failed to bind listener: {0}")]
+    Bind(std::io::Error),
+    #[error("Server error: {0}")]
+    Serve(std::io::Error),
+}
+
 #[tokio::main]
 async fn main() {
+    if let Err(err) = run().await {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), GatewayStartupError> {
+    dotenvy::dotenv().ok();
     let host = env::var("QIMEM_GATEWAY_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port: u16 = env::var("QIMEM_GATEWAY_PORT")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(8081);
 
-    let auth = AuthConfig::from_env().expect("Missing Better Auth configuration");
+    let auth = AuthConfig::from_env()?;
     let kms = KmsService::from_env()
         .await
-        .expect("Missing KMS configuration");
+        .map_err(|_| GatewayStartupError::Kms)?;
 
     let state = GatewayState { auth, kms };
 
@@ -70,13 +92,15 @@ async fn main() {
 
     let addr: SocketAddr = format!("{}:{}", host, port)
         .parse()
-        .expect("Invalid host/port");
+        .map_err(|_| GatewayStartupError::Addr)?;
     println!("QIMEM Gateway listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
-        .expect("Failed to bind");
-    axum::serve(listener, app).await.expect("Server error");
+        .map_err(GatewayStartupError::Bind)?;
+    axum::serve(listener, app)
+        .await
+        .map_err(GatewayStartupError::Serve)
 }
 
 async fn proxy_handler(
@@ -179,9 +203,14 @@ fn extract_tenant_id(headers: &HeaderMap, user: &AuthUser) -> Result<Uuid, Gatew
         .tenant_id
         .as_ref()
         .ok_or(GatewayError::Auth(AuthError::InvalidToken))?;
-    let user_tenant_id =
-        Uuid::parse_str(user_tenant).map_err(|_| GatewayError::InvalidInput("Invalid tenant id"))?;
-    if tenant_id.as_bytes().ct_eq(user_tenant_id.as_bytes()).unwrap_u8() != 1 {
+    let user_tenant_id = Uuid::parse_str(user_tenant)
+        .map_err(|_| GatewayError::InvalidInput("Invalid tenant id"))?;
+    if tenant_id
+        .as_bytes()
+        .ct_eq(user_tenant_id.as_bytes())
+        .unwrap_u8()
+        != 1
+    {
         return Err(GatewayError::Auth(AuthError::InvalidToken));
     }
     Ok(tenant_id)
@@ -199,7 +228,10 @@ impl IntoResponse for GatewayError {
         let (status, message) = match self {
             GatewayError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
             GatewayError::Crypto(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-            GatewayError::Auth(_) => (StatusCode::UNAUTHORIZED, "Unauthorized"),
+            GatewayError::Auth(err) => {
+                let _ = err.to_string();
+                (StatusCode::UNAUTHORIZED, "Unauthorized")
+            }
         };
         (status, Json(serde_json::json!({"error": message}))).into_response()
     }

@@ -2058,6 +2058,7 @@ dependencies = [
  "bincode",
  "chacha20poly1305",
  "chrono",
+ "dotenvy",
  "ed25519-dalek",
  "hkdf",
  "jsonwebtoken",

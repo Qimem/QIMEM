@@ -14,6 +14,8 @@ pub enum PqAlgorithm {
     Kyber1024,
 }
 
+pub type HybridSession = (Vec<u8>, Vec<u8>, Vec<u8>);
+
 impl PqAlgorithm {
     pub fn from_name(name: Option<&str>) -> Result<Self, &'static str> {
         match name.unwrap_or("kyber1024").to_lowercase().as_str() {
@@ -47,7 +49,10 @@ pub struct Kyber1024Kex;
 impl KexAlgorithm for Kyber1024Kex {
     fn keypair() -> (Vec<u8>, Vec<u8>) {
         let (public_key, secret_key) = kyber1024::keypair();
-        (public_key.as_bytes().to_vec(), secret_key.as_bytes().to_vec())
+        (
+            public_key.as_bytes().to_vec(),
+            secret_key.as_bytes().to_vec(),
+        )
     }
 
     fn encapsulate(public_key: &[u8]) -> Result<(Vec<u8>, Vec<u8>), &'static str> {
@@ -146,7 +151,7 @@ pub fn hybrid_session(
     algorithm: PqAlgorithm,
     client_x25519_public: &[u8],
     client_kyber_public: &[u8],
-) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), &'static str> {
+) -> Result<HybridSession, &'static str> {
     let server_secret = StaticSecret::random_from_rng(OsRng);
     let server_public = PublicKey::from(&server_secret);
     let client_public = PublicKey::from(

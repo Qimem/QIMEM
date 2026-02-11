@@ -11,6 +11,7 @@ pub struct DbState {
 impl DbState {
     pub async fn connect(database_url: &str) -> Result<Self, sqlx::Error> {
         let pool = PgPool::connect(database_url).await?;
+        sqlx::migrate!("./migrations").run(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -98,7 +99,9 @@ impl DbState {
         })
     }
 
-    pub async fn fetch_all_master_key_versions(&self) -> Result<Vec<TenantKeyVersion>, sqlx::Error> {
+    pub async fn fetch_all_master_key_versions(
+        &self,
+    ) -> Result<Vec<TenantKeyVersion>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT tenant_id, version, wrapped_master_key, created_at FROM tenant_master_key_versions",
         )
@@ -151,12 +154,14 @@ impl DbState {
         key_version: i64,
         wrapped_master_key: &[u8],
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE tenants SET wrapped_master_key = $1 WHERE id = $2 AND key_version = $3")
-            .bind(wrapped_master_key)
-            .bind(tenant_id)
-            .bind(key_version)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE tenants SET wrapped_master_key = $1 WHERE id = $2 AND key_version = $3",
+        )
+        .bind(wrapped_master_key)
+        .bind(tenant_id)
+        .bind(key_version)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -166,14 +171,12 @@ impl DbState {
         key_version: i64,
         updated_at: chrono::NaiveDateTime,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE tenants SET key_version = $1, updated_at = $2 WHERE id = $3",
-        )
-        .bind(key_version)
-        .bind(updated_at)
-        .bind(tenant_id)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE tenants SET key_version = $1, updated_at = $2 WHERE id = $3")
+            .bind(key_version)
+            .bind(updated_at)
+            .bind(tenant_id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 

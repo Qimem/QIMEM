@@ -1,19 +1,20 @@
 use axum::extract::FromRef;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::{async_trait, extract::FromRequestParts};
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use std::env;
 use thiserror::Error;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 
 #[derive(Clone, Debug)]
 pub struct AuthConfig {
     pub jwt_secret: String,
-    pub issuer: Option<String>,
-    pub audience: Option<String>,
+    pub issuer: String,
+    pub audience: String,
+    pub mfa_totp_secret: Option<String>,
     pub auth_disabled: bool,
 }
 
@@ -25,19 +26,24 @@ impl AuthConfig {
         if auth_disabled {
             return Ok(Self {
                 jwt_secret: String::new(),
-                issuer: None,
-                audience: None,
+                issuer: String::new(),
+                audience: String::new(),
+                mfa_totp_secret: None,
                 auth_disabled,
             });
         }
         let jwt_secret = env::var("QIMEM_AUTH_JWT_SECRET")
             .map_err(|_| AuthError::MissingConfig("QIMEM_AUTH_JWT_SECRET"))?;
-        let issuer = env::var("QIMEM_AUTH_ISSUER").ok();
-        let audience = env::var("QIMEM_AUTH_AUDIENCE").ok();
+        let issuer = env::var("QIMEM_AUTH_ISSUER")
+            .map_err(|_| AuthError::MissingConfig("QIMEM_AUTH_ISSUER"))?;
+        let audience = env::var("QIMEM_AUTH_AUDIENCE")
+            .map_err(|_| AuthError::MissingConfig("QIMEM_AUTH_AUDIENCE"))?;
+        let mfa_totp_secret = env::var("QIMEM_MFA_TOTP_SECRET").ok();
         Ok(Self {
             jwt_secret,
             issuer,
             audience,
+            mfa_totp_secret,
             auth_disabled,
         })
     }
@@ -109,12 +115,8 @@ where
             .ok_or(AuthError::InvalidScheme)?;
 
         let mut validation = Validation::new(Algorithm::HS256);
-        if let Some(issuer) = &auth_config.issuer {
-            validation.set_issuer(&[issuer]);
-        }
-        if let Some(audience) = &auth_config.audience {
-            validation.set_audience(&[audience]);
-        }
+        validation.set_issuer(&[&auth_config.issuer]);
+        validation.set_audience(&[&auth_config.audience]);
 
         let decoded = decode::<Claims>(
             token,
