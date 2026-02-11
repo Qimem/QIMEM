@@ -95,7 +95,7 @@ async fn proxy_handler(
     if !algorithm_ok {
         return Err(GatewayError::InvalidInput("Unsupported algorithm"));
     }
-    let plaintext = state
+    let mut plaintext = state
         .kms
         .decrypt_for_gateway(
             tenant_id,
@@ -110,9 +110,8 @@ async fn proxy_handler(
 
     let provider_response = match payload.provider.as_str() {
         "mock" => {
-            let mut reversed = plaintext.clone();
-            reversed.reverse();
-            String::from_utf8_lossy(&reversed).to_string()
+            plaintext.reverse();
+            String::from_utf8_lossy(&plaintext).to_string()
         }
         "custom" => {
             let endpoint = payload
@@ -136,7 +135,7 @@ async fn proxy_handler(
             let response = client
                 .post(endpoint)
                 .headers(req_headers)
-                .body(plaintext.clone())
+                .body(plaintext.to_vec())
                 .send()
                 .await
                 .map_err(|_| GatewayError::Crypto("Provider request failed"))?;
@@ -160,8 +159,7 @@ async fn proxy_handler(
         .await
         .map_err(|_| GatewayError::Crypto("Audit write failed"))?;
 
-    let mut plaintext_zeroize = plaintext;
-    plaintext_zeroize.zeroize();
+    plaintext.zeroize();
 
     Ok(Json(ProxyResponse {
         provider: payload.provider,
