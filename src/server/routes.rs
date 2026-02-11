@@ -3,11 +3,10 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit, Nonce};
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
+use zeroize::Zeroize;
 use uuid::Uuid;
 
 use crate::q_core;
@@ -407,12 +406,13 @@ async fn kms_unwrap_dek(
 ) -> Result<Json<KmsUnwrapDekResponse>, ApiError> {
     require_scope(&user, "kms:decrypt")?;
     let tenant_id = extract_tenant_id(&headers, &user)?;
-    let dek = state
+    let mut dek = state
         .kms
         .unwrap_dek(tenant_id, payload.wrapped_dek_b64, payload.key_version)
         .await
         .map_err(ApiError::from)?;
-    let dek_b64 = STANDARD.encode(&dek);
+    let dek_b64 = STANDARD.encode(&*dek);
+    dek.zeroize();
     Ok(Json(KmsUnwrapDekResponse { dek_b64 }))
 }
 

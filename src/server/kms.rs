@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::env;
 use subtle::ConstantTimeEq;
 use zeroize::ZeroizeOnDrop;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use uuid::Uuid;
 
@@ -87,9 +87,11 @@ impl RootKey {
     }
 
     fn from_env_override(value: &str) -> Result<Self, KmsError> {
-        let decoded = STANDARD
-            .decode(value)
-            .map_err(|_| KmsError::InvalidRootKey)?;
+        let decoded = Zeroizing::new(
+            STANDARD
+                .decode(value)
+                .map_err(|_| KmsError::InvalidRootKey)?,
+        );
         if decoded.len() != 32 {
             return Err(KmsError::InvalidRootKey);
         }
@@ -288,7 +290,12 @@ impl KmsService {
         tenant_id: Uuid,
         wrapped_dek_b64: String,
         key_version: u32,
-    ) -> Result<Vec<u8>, KmsError> {
+    ) -> Result<Zeroizing<Vec<u8>>, KmsError> {
+        let _tenant = self
+            .db
+            .fetch_tenant(tenant_id)
+            .await
+            .map_err(|_| KmsError::TenantNotFound)?;
         let master_version = self
             .db
             .fetch_master_key_version(tenant_id, key_version as i32)
@@ -298,11 +305,9 @@ impl KmsService {
         let wrapped_dek = STANDARD
             .decode(wrapped_dek_b64)
             .map_err(|_| KmsError::InvalidInput)?;
-        let mut dek = unwrap_key(&wrapped_dek, &master_key)?;
+        let dek = unwrap_key(&wrapped_dek, &master_key)?;
         master_key.zeroize();
-        let dek_copy = dek.clone();
-        dek.zeroize();
-        Ok(dek_copy)
+        Ok(Zeroizing::new(dek))
     }
 
     pub async fn rotate_master_key(&self, tenant_id: Uuid) -> Result<RotateMasterKeyResponse, KmsError> {
@@ -421,7 +426,12 @@ impl KmsService {
         nonce_b64: String,
         algorithm: String,
         key_version: u32,
-    ) -> Result<Vec<u8>, KmsError> {
+    ) -> Result<Zeroizing<Vec<u8>>, KmsError> {
+        let _tenant = self
+            .db
+            .fetch_tenant(tenant_id)
+            .await
+            .map_err(|_| KmsError::TenantNotFound)?;
         let master_version = self
             .db
             .fetch_master_key_version(tenant_id, key_version as i32)
@@ -439,7 +449,7 @@ impl KmsService {
         let plaintext = decrypt_payload(&ciphertext, &nonce, &dek)?;
         dek.zeroize();
         master_key.zeroize();
-        Ok(plaintext)
+        Ok(Zeroizing::new(plaintext))
     }
 }
 
