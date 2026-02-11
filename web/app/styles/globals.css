@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { @apply bg-base-bg text-base-text font-sans antialiased; }
+code, pre { @apply font-mono; }

@@ -1,30 +1,22 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
-  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"] ,
+  content: ["./app/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        base: {
-          900: "#0E1116",
-          800: "#161B22",
-          700: "#1F252E",
-          600: "#2A2F36",
-        },
-        accent: {
-          DEFAULT: "#2DD4BF",
-          green: "#22C55E",
-        },
+        "base-bg": "#0E1116",
+        "base-surface": "#161B22",
+        "base-border": "#2A2F36",
+        "base-text": "#D4D4D8",
+        accent: "#2DD4BF",
       },
       boxShadow: {
-        panel: "0 10px 30px rgba(0, 0, 0, 0.35)",
-      },
-      borderRadius: {
-        md: "6px",
+        panel: "0 10px 24px rgba(0, 0, 0, 0.35)",
       },
       fontFamily: {
-        sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
-        mono: ["var(--font-jetbrains)", "JetBrains Mono", "ui-monospace", "SFMono-Regular"],
+        sans: ["var(--font-inter)", "Inter", "sans-serif"],
+        mono: ["var(--font-jetbrains)", "JetBrains Mono", "ui-monospace"],
       },
     },
   },
