@@ -1,2 +1,14 @@
+# Global Cargo configuration for local dev + CI.
+# These env vars are applied to all cargo invocations.
 [env]
+# Use the intended Python interpreter for PyO3 discovery.
 PYO3_PYTHON = "python3.12"
+# Ensure any C objects compiled by transitive build scripts are PIC-safe when linked into cdylib.
+CFLAGS = "-fPIC"
+CXXFLAGS = "-fPIC"
+
+# Linux linker preference.
+# rust-lld can fail in some PyO3 + C static object scenarios with R_X86_64_PC32 relocations.
+# Using GNU bfd here avoids that class of failures for dev/test builds.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=bfd"]
