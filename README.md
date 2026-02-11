@@ -1,142 +1,86 @@
-# QIMEM: Tenant-Scoped KMS + Secure AI Gateway
+# QIMEM Unified Cryptographic Trust Platform
 
-QIMEM is a Rust-based, tenant-scoped key management service (KMS) with strict envelope
-encryption, audit chaining, and a provider-agnostic secure gateway for AI workloads. The
-web console is a security control plane for operators and developers.
+QIMEM is organized as a unified trust layer for AI, APIs, and distributed systems with strict separation of local cryptographic operations and tenant-scoped infrastructure controls.
 
-> **Status**: Work-in-progress. Production hardening is in progress.
+## Architecture
 
-## What QIMEM Does
+- **QIMEM-Core** (`qimem-core/`)
+  - Local/edge/CLI/WASM cryptographic engine.
+  - Envelope encryption, signing, verification, and hybrid PQ session derivation.
+  - Offline-capable and root-key independent.
+- **QIMEM-Infra** (`qimem-infra/` + existing server in `src/server/`)
+  - Multi-tenant KMS and Secure AI Gateway.
+  - Root key in memory only, versioned master keys, hash-chained audit logs.
+  - JWT + `X-Tenant-ID` enforcement and constant-time tenant checks.
+- **Shared Cryptographic Primitives** (`qimem-crypto/`)
+  - AES-256-GCM, X25519, Kyber, HKDF-SHA256, SHA-256, Ed25519, constant-time compare, zeroizing wrappers.
+- **Unified SDK** (`sdk/`)
+  - Browser + Node support with first-class `encrypt/decrypt/sign/verify/pqSession/wrapDek/unwrapDek/gatewayProxy`.
+- **Web Control Plane + Public Playground** (`web/`)
+  - Public cryptography playground and operator-focused security control plane.
 
-- **Tenant-scoped KMS** with JWT + `X-Tenant-ID` enforcement.
-- **Envelope encryption**: root key → tenant master key → DEK → payload.
-- **Master key rotation** with versioning and audit logs.
-- **Hybrid post-quantum sessions** (X25519 + Kyber + HKDF).
-- **Secure AI gateway** that decrypts in memory and forwards to providers.
-- **Hash-chained audit logs** for decrypts and rotations.
+## Directory Structure
 
-## Repository Layout
-
-```
-qimem/
-├─ src/                # Rust core, API server, gateway, crypto modules
-├─ web/                # Next.js control plane UI
-├─ sdk/                # Minimal JS SDK (@qimem/sdk)
-├─ examples/           # SDK examples
-├─ docs/               # Architecture references
-└─ tests/              # Integration test suite
-```
-
-## Running the API
-
-1. Configure environment variables (see below).
-2. Run the API server:
-
-```bash
-cargo run --bin qimem-api
-```
-
-### Required Environment Variables
-
-- `QIMEM_DATABASE_URL` — Postgres connection string.
-- `QIMEM_ROOT_KEY_SOURCE` — `env` or `secret-manager`.
-- `QIMEM_ROOT_KEY_B64` — base64-encoded 32-byte root key (required for `env`).
-- `BETTER_AUTH_JWT_SECRET` — JWT signing secret.
-- `BETTER_AUTH_ISSUER` / `BETTER_AUTH_AUDIENCE` — optional JWT validation controls.
-
-### Root Key Notes
-
-- The root key **never** leaves memory and is never stored in Postgres.
-- Loss of the root key is unrecoverable for encrypted data.
-- Rotation is destructive and only available via the CLI (see below).
-
-See `docs/root-key.md` for full operational guidance.
-
-## KMS API Overview (JSON)
-
-- `POST /v1/kms/tenants`
-- `POST /v1/kms/encrypt`
-- `POST /v1/kms/decrypt`
-- `POST /v1/kms/wrap-dek`
-- `POST /v1/kms/unwrap-dek`
-- `POST /v1/kms/rotate-master-key`
-- `POST /v1/kms/pq/keypair`
-- `POST /v1/kms/pq/session`
-
-Legacy demo endpoints are available under `/v0/*` and are deprecated.
-
-## Secure Gateway
-
-Run the gateway:
-
-```bash
-cargo run --bin qimem-gateway
+```text
+QIMEM/
+├── qimem-crypto/                # Shared cryptographic primitives crate
+├── qimem-core/                  # Local engine crate (lib + CLI + WASM hooks)
+├── qimem-infra/                 # Infra interfaces (provider trait + gateway skeleton)
+├── src/                         # Existing infra API/KMS/gateway implementation
+├── tests/                       # Integration tests (tenant isolation, rotation, PQ, audit)
+├── sdk/                         # @qimem/sdk package
+├── web/                         # Next.js App Router control plane + playground
+├── docs/
+│   ├── api.md
+│   ├── root-key.md
+│   ├── schema.sql
+│   ├── threat-model.md
+│   └── web.md
+└── examples/
 ```
 
-Gateway endpoint:
+## Infra Security Defaults
 
-- `POST /v1/gateway/proxy`
+- Root key required on startup (`QIMEM_ROOT_KEY_B64` via configured source).
+- Root key never persisted.
+- Destructive root rotation guarded by:
+  - `ENABLE_DESTRUCTIVE_ROTATION=true`
+  - `QIMEM_ROOT_ROTATION_CONFIRMATION=CONFIRM_ROOT_ROTATION_AND_DATA_REENCRYPTION`
+  - `--dry-run` preflight.
+- Legacy `/v0` endpoints are deprecated and should be disabled in production policy.
 
-The gateway decrypts the request payload in memory, forwards plaintext to the provider,
-and immediately zeroizes buffers. A mock provider reverses the prompt for safe demos.
+## Integration Test Coverage
 
-## Root Key Rotation (Destructive)
+The integration suite covers:
 
-Root rotation requires explicit intent and is **not** exposed via HTTP.
+- Encrypt → rotate master key → decrypt continuity.
+- Cross-tenant isolation rejection.
+- Hybrid PQ session derivation metadata correctness.
+- Audit hash-chain integrity.
+- Root rotation dry-run/flag enforcement and execution behavior.
 
-```bash
-export ENABLE_DESTRUCTIVE_ROTATION=true
-export QIMEM_ROOT_ROTATION_CONFIRMATION=CONFIRM_ROOT_ROTATION_AND_DATA_REENCRYPTION
-export QIMEM_NEW_ROOT_KEY_B64=<base64-32-byte-key>
-
-cargo run --bin qimem-root-rotation -- --dry-run
-cargo run --bin qimem-root-rotation
-```
-
-Rotation rewraps all tenant master key versions and writes audit entries before and after.
-
-## SDK (JavaScript)
-
-Minimal usage:
-
-```ts
-import { Qimem } from "@qimem/sdk";
-
-const client = new Qimem({
-  apiKey: "<jwt>",
-  tenantId: "<uuid>",
-  baseUrl: "http://localhost:8080",
-});
-
-const encrypted = await client.encrypt("hello");
-const decrypted = await client.decrypt(encrypted);
-```
-
-See `examples/sdk-basic/README.md` for a full working example.
-
-## Web Control Plane
-
-```bash
-npm install
-npm run web:dev
-```
-
-The UI provides a tenant dashboard, secure playground, and audit visualization.
-
-## Testing
-
-The test suite uses ephemeral Postgres via testcontainers.
+Run:
 
 ```bash
 cargo test
 ```
 
-Coverage (requires `cargo-llvm-cov`):
+## SDK Quick Start
 
-```bash
-./scripts/coverage.sh
+```ts
+import { init, encrypt, decrypt, gatewayProxy } from "@qimem/sdk";
+
+const client = init({
+  apiKey: "<jwt>",
+  tenantId: "<tenant-id>",
+  baseUrl: "http://localhost:8080",
+});
+
+const blob = await encrypt(client, "hello qimem");
+const text = await decrypt(client, blob);
+const response = await gatewayProxy(client, blob, { provider: "mock" });
 ```
 
-## License
+## Threat Model
 
-Copyright © QIMEM. All rights reserved.
+See `docs/threat-model.md` for adversary assumptions, HNDL posture, tenant isolation guarantees, root-key compromise impact, gateway plaintext exposure boundaries, and audit tamper detection model.

@@ -2,7 +2,7 @@ import { encode, decode } from "@stablelib/base64";
 import { ChaCha20Poly1305 } from "@stablelib/chacha20poly1305";
 import { randomBytes } from "@stablelib/random";
 
-type InitConfig = {
+export type InitConfig = {
   apiKey: string;
   tenantId: string;
   baseUrl?: string;
@@ -17,10 +17,11 @@ export type EncryptedBlob = {
 };
 
 export type SecurePromptOptions = {
-  provider: "mock" | "custom";
+  provider: "mock" | "openai-compatible" | "custom";
   providerConfig?: {
     endpoint?: string;
     headers?: Record<string, string>;
+    model?: string;
   };
 };
 
@@ -41,6 +42,7 @@ export class Qimem {
     const cipher = new ChaCha20Poly1305(dek);
     const ciphertext = cipher.seal(nonce, new TextEncoder().encode(data));
     const wrappedDekResponse = await this.wrapDek(dek);
+    dek.fill(0);
     return {
       ciphertext: encode(ciphertext),
       wrappedDek: wrappedDekResponse.wrapped_dek,
@@ -54,6 +56,7 @@ export class Qimem {
     const dek = await this.unwrapDek(blob.wrappedDek, blob.keyVersion);
     const cipher = new ChaCha20Poly1305(dek);
     const plaintext = cipher.open(decode(blob.nonce), decode(blob.ciphertext));
+    dek.fill(0);
     if (!plaintext) {
       throw new Error("Failed to decrypt payload");
     }
@@ -62,29 +65,45 @@ export class Qimem {
     return text;
   }
 
-  async wrapApiKey(apiKey: string): Promise<EncryptedBlob> {
-    return this.encrypt(apiKey);
+  async sign(message: string) {
+    return this.post("/v1/sign", { message });
   }
 
-  async securePrompt(prompt: string, options: SecurePromptOptions) {
-    const encrypted = await this.encrypt(prompt);
-    const response = await fetch(`${this.baseUrl}/v1/gateway/proxy`, {
-      method: "POST",
-      headers: this.baseHeaders(),
-      body: JSON.stringify({
-        provider: options.provider,
-        encrypted_payload: encrypted.ciphertext,
-        wrapped_dek: encrypted.wrappedDek,
-        key_version: encrypted.keyVersion,
-        provider_config: options.providerConfig ?? {},
-        nonce: encrypted.nonce,
-        algorithm: encrypted.algorithm,
-      }),
+  async verify(signatureB64: string, message: string, publicKeyB64: string) {
+    const response = await this.post("/v1/verify", {
+      signature_b64: signatureB64,
+      message,
+      public_key_b64: publicKeyB64,
     });
-    if (!response.ok) {
-      throw new Error(`Gateway error: ${response.status}`);
-    }
-    return response.json();
+    return response.valid as boolean;
+  }
+
+  async pqSession(serverPublicKeyB64: string) {
+    return this.post("/v1/kms/pq/session", { client_public_key_b64: serverPublicKeyB64 });
+  }
+
+  async wrapDek(dek: Uint8Array): Promise<{ wrapped_dek: string; key_version: number }> {
+    return this.post("/v1/kms/wrap-dek", { dek_b64: encode(dek) });
+  }
+
+  async unwrapDek(wrappedDek: string, keyVersion: number): Promise<Uint8Array> {
+    const data = await this.post("/v1/kms/unwrap-dek", {
+      wrapped_dek_b64: wrappedDek,
+      key_version: keyVersion,
+    });
+    return decode(data.dek_b64);
+  }
+
+  async gatewayProxy(payload: EncryptedBlob, options: SecurePromptOptions) {
+    return this.post("/v1/gateway/proxy", {
+      provider: options.provider,
+      encrypted_payload: payload.ciphertext,
+      wrapped_dek: payload.wrappedDek,
+      key_version: payload.keyVersion,
+      provider_config: options.providerConfig ?? {},
+      nonce: payload.nonce,
+      algorithm: payload.algorithm,
+    });
   }
 
   private baseHeaders() {
@@ -95,37 +114,51 @@ export class Qimem {
     };
   }
 
-  private async wrapDek(dek: Uint8Array): Promise<{ wrapped_dek: string; key_version: number }> {
-    const response = await fetch(`${this.baseUrl}/v1/kms/wrap-dek`, {
+  private async post(path: string, body: unknown) {
+    const response = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
       headers: this.baseHeaders(),
-      body: JSON.stringify({
-        dek_b64: encode(dek),
-      }),
+      body: JSON.stringify(body),
     });
     if (!response.ok) {
-      throw new Error(`Failed to wrap DEK: ${response.status}`);
+      throw new Error(`${path} failed: ${response.status}`);
     }
     return response.json();
-  }
-
-  private async unwrapDek(wrappedDek: string, keyVersion: number): Promise<Uint8Array> {
-    const response = await fetch(`${this.baseUrl}/v1/kms/unwrap-dek`, {
-      method: "POST",
-      headers: this.baseHeaders(),
-      body: JSON.stringify({
-        wrapped_dek_b64: wrappedDek,
-        key_version: keyVersion,
-      }),
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to unwrap DEK: ${response.status}`);
-    }
-    const data = await response.json();
-    return decode(data.dek_b64);
   }
 }
 
 export function init(config: InitConfig) {
   return new Qimem(config);
+}
+
+export async function encrypt(client: Qimem, data: string) {
+  return client.encrypt(data);
+}
+
+export async function decrypt(client: Qimem, blob: EncryptedBlob) {
+  return client.decrypt(blob);
+}
+
+export async function sign(client: Qimem, message: string) {
+  return client.sign(message);
+}
+
+export async function verify(client: Qimem, signatureB64: string, message: string, publicKeyB64: string) {
+  return client.verify(signatureB64, message, publicKeyB64);
+}
+
+export async function pqSession(client: Qimem, serverPublicKeyB64: string) {
+  return client.pqSession(serverPublicKeyB64);
+}
+
+export async function wrapDek(client: Qimem, dek: Uint8Array) {
+  return client.wrapDek(dek);
+}
+
+export async function unwrapDek(client: Qimem, wrappedDek: string, keyVersion: number) {
+  return client.unwrapDek(wrappedDek, keyVersion);
+}
+
+export async function gatewayProxy(client: Qimem, payload: EncryptedBlob, options: SecurePromptOptions) {
+  return client.gatewayProxy(payload, options);
 }
