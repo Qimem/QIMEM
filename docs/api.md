@@ -9,8 +9,8 @@ setting `QIMEM_AUTH_DISABLED=true`. When auth is enabled, all calls require a JW
 Authorization: Bearer <token>
 ```
 
-The API validates the JWT signature using `BETTER_AUTH_JWT_SECRET`. Optionally set
-`BETTER_AUTH_ISSUER` and `BETTER_AUTH_AUDIENCE` to enforce issuer/audience.
+The API validates the JWT signature using `QIMEM_AUTH_JWT_SECRET`. Optionally set
+`QIMEM_AUTH_ISSUER` and `QIMEM_AUTH_AUDIENCE` to enforce issuer/audience.
 
 ## Policy Controls
 
