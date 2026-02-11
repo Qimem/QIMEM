@@ -1,30 +1,24 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
-  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"] ,
+  content: ["./app/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        base: {
-          900: "#0E1116",
-          800: "#161B22",
-          700: "#1F252E",
-          600: "#2A2F36",
-        },
-        accent: {
-          DEFAULT: "#2DD4BF",
-          green: "#22C55E",
-        },
+        "base-bg": "#0B0D10",
+        "base-surface": "#121417",
+        "base-border": "#3B4148",
+        "base-text": "#D0D4D9",
+        accent: "#C9D1D9",
+        "accent-strong": "#F2F4F6",
       },
       boxShadow: {
-        panel: "0 10px 30px rgba(0, 0, 0, 0.35)",
-      },
-      borderRadius: {
-        md: "6px",
+        panel: "0 0 0 1px rgba(201,209,217,0.28), 0 0 22px rgba(201,209,217,0.18)",
+        glow: "0 0 0 1px rgba(201,209,217,0.35), 0 0 14px rgba(201,209,217,0.2)",
       },
       fontFamily: {
-        sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
-        mono: ["var(--font-jetbrains)", "JetBrains Mono", "ui-monospace", "SFMono-Regular"],
+        sans: ["var(--font-inter)", "Inter", "sans-serif"],
+        mono: ["var(--font-jetbrains)", "JetBrains Mono", "ui-monospace"],
       },
     },
   },
