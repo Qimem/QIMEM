@@ -6,13 +6,13 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
-use zeroize::Zeroize;
 use uuid::Uuid;
+use zeroize::Zeroize;
 
+use crate::pq;
 use crate::q_core;
 use crate::q_keygen;
 use crate::signing;
-use crate::pq;
 
 use super::auth::{AuthConfig, AuthError, AuthUser};
 use super::kms::{DecryptRequest as KmsDecryptPayload, KmsError, KmsService};
@@ -429,7 +429,11 @@ async fn rotate_master_key(
 ) -> Result<Json<RotateMasterKeyResponse>, ApiError> {
     require_scope(&user, "kms:rotate")?;
     let tenant_id = extract_tenant_id(&headers, &user)?;
-    let response = state.kms.rotate_master_key(tenant_id).await.map_err(ApiError::from)?;
+    let response = state
+        .kms
+        .rotate_master_key(tenant_id)
+        .await
+        .map_err(ApiError::from)?;
     Ok(Json(RotateMasterKeyResponse {
         key_version: response.key_version,
         rotated_at: response.rotated_at.and_utc().timestamp() as u64,
@@ -544,8 +548,7 @@ async fn kms_audit_logs(
         .map_err(ApiError::from)?;
     logs.reverse();
     Ok(Json(
-        logs
-            .into_iter()
+        logs.into_iter()
             .map(|entry| AuditLogEntryResponse {
                 id: entry.id.to_string(),
                 tenant_id: entry.tenant_id.to_string(),
@@ -751,15 +754,20 @@ fn extract_tenant_id(headers: &HeaderMap, user: &AuthUser) -> Result<Uuid, ApiEr
         .ok_or(ApiError::Auth(AuthError::MissingAuthorization))?
         .to_str()
         .map_err(|_| ApiError::InvalidInput("Invalid tenant header"))?;
-    let tenant_id = Uuid::parse_str(header_value)
-        .map_err(|_| ApiError::InvalidInput("Invalid tenant id"))?;
+    let tenant_id =
+        Uuid::parse_str(header_value).map_err(|_| ApiError::InvalidInput("Invalid tenant id"))?;
     let user_tenant = user
         .tenant_id
         .as_ref()
         .ok_or(ApiError::Auth(AuthError::InvalidToken))?;
     let user_tenant_id =
         Uuid::parse_str(user_tenant).map_err(|_| ApiError::InvalidInput("Invalid tenant id"))?;
-    if tenant_id.as_bytes().ct_eq(user_tenant_id.as_bytes()).unwrap_u8() != 1 {
+    if tenant_id
+        .as_bytes()
+        .ct_eq(user_tenant_id.as_bytes())
+        .unwrap_u8()
+        != 1
+    {
         return Err(ApiError::Auth(AuthError::InvalidToken));
     }
     Ok(tenant_id)

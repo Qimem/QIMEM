@@ -1,6 +1,6 @@
-use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit, Nonce};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit, Nonce};
 use rand::RngCore;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
@@ -21,7 +21,7 @@ async fn test_encrypt_rotate_decrypt() {
     }
     let test_db = test_support::setup_test_db().await;
     let tenant_id = uuid::Uuid::new_v4();
-    let mut root_key = [7u8; 32];
+    let root_key = [7u8; 32];
     let mut master_key = generate_master_key();
     let wrapped_master_key = wrap_key(&master_key, &root_key).unwrap();
     master_key.zeroize();
@@ -48,7 +48,10 @@ async fn test_encrypt_rotate_decrypt() {
     let mut nonce_bytes = [0u8; 12];
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce_bytes), b"secret payload".as_slice())
+        .encrypt(
+            Nonce::from_slice(&nonce_bytes),
+            b"secret payload".as_slice(),
+        )
         .unwrap();
     let wrapped_dek = wrap_key(&dek, &unwrap_key(&wrapped_master_key, &root_key).unwrap()).unwrap();
 
@@ -85,7 +88,7 @@ async fn test_cross_tenant_isolation() {
     let test_db = test_support::setup_test_db().await;
     let tenant_a = uuid::Uuid::new_v4();
     let tenant_b = uuid::Uuid::new_v4();
-    let mut root_key = [9u8; 32];
+    let root_key = [9u8; 32];
     let mut master_a = generate_master_key();
     let wrapped_a = wrap_key(&master_a, &root_key).unwrap();
     master_a.zeroize();
@@ -139,7 +142,7 @@ async fn test_cross_tenant_isolation() {
 
 #[tokio::test]
 async fn test_pq_session_metadata() {
-    let client_secret = x25519_dalek::StaticSecret::new(rand_core::OsRng);
+    let client_secret = x25519_dalek::StaticSecret::random_from_rng(rand_core::OsRng);
     let client_public = x25519_dalek::PublicKey::from(&client_secret);
     let kyber = pq::keypair(pq::PqAlgorithm::Kyber1024);
     let (server_public, session_key, _ciphertext) = pq::hybrid_session(
@@ -150,12 +153,14 @@ async fn test_pq_session_metadata() {
     .unwrap();
     assert_eq!(server_public.len(), 32);
     assert_eq!(session_key.len(), 32);
-    assert!(pq::PqAlgorithm::Kyber1024
-        .algorithm_id()
-        .as_bytes()
-        .ct_eq(b"kyber1024")
-        .unwrap_u8()
-        == 1);
+    assert!(
+        pq::PqAlgorithm::Kyber1024
+            .algorithm_id()
+            .as_bytes()
+            .ct_eq(b"kyber1024")
+            .unwrap_u8()
+            == 1
+    );
 }
 
 #[tokio::test]
@@ -214,7 +219,7 @@ async fn test_root_rotation_rewraps_keys() {
     let old_root_b64 = STANDARD.encode(old_root);
     let new_root_b64 = STANDARD.encode(new_root);
 
-    std::env::set_var("QIMEM_DATABASE_URL", test_db.database_url);
+    std::env::set_var("DATABASE_URL", test_db.database_url);
     std::env::set_var("QIMEM_ROOT_KEY_SOURCE", "env");
     std::env::set_var("QIMEM_ROOT_KEY_B64", old_root_b64);
     std::env::set_var("QIMEM_NEW_ROOT_KEY_B64", new_root_b64);

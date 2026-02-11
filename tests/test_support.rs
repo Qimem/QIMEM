@@ -12,6 +12,7 @@ pub struct TestDb {
     // Keep container alive for whole async test execution.
     _container: testcontainers::ContainerAsync<Postgres>,
     pub db: DbState,
+    #[allow(dead_code)]
     pub database_url: String,
 }
 
@@ -44,9 +45,8 @@ pub async fn setup_test_db() -> TestDb {
         .expect("resolve postgres port");
 
     // IMPORTANT: disable SSL against local testcontainers postgres to avoid SSLRequest issues.
-    let database_url = format!(
-        "postgres://postgres:postgres@{host}:{port}/postgres?sslmode=disable"
-    );
+    let database_url =
+        format!("postgres://postgres:postgres@{host}:{port}/postgres?sslmode=disable");
 
     // Explicit readiness check: retry connection + lightweight health query.
     let pool = connect_with_retry(&database_url, 30, Duration::from_millis(300)).await;
@@ -78,7 +78,10 @@ async fn connect_with_retry(database_url: &str, attempts: usize, delay: Duration
 async fn wait_for_healthcheck(pool: &PgPool, attempts: usize, delay: Duration) {
     let mut last_err = None;
     for _ in 0..attempts {
-        match sqlx::query_scalar::<_, i64>("SELECT 1::BIGINT").fetch_one(pool).await {
+        match sqlx::query_scalar::<_, i64>("SELECT 1::BIGINT")
+            .fetch_one(pool)
+            .await
+        {
             Ok(_) => return,
             Err(err) => {
                 last_err = Some(err);
@@ -90,12 +93,8 @@ async fn wait_for_healthcheck(pool: &PgPool, attempts: usize, delay: Duration) {
 }
 
 async fn apply_schema(pool: &PgPool) {
-    let schema = include_str!("../docs/schema.sql");
-    for statement in schema.split(';') {
-        let trimmed = statement.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let _ = sqlx::query(trimmed).execute(pool).await;
-    }
+    sqlx::migrate!("./migrations")
+        .run(pool)
+        .await
+        .expect("apply migrations");
 }

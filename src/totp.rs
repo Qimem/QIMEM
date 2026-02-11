@@ -1,9 +1,9 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-use totp_rs::{Algorithm, TOTP};
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use rand::RngCore;
-use pyo3::exceptions::PyValueError;
+use totp_rs::{Algorithm, TOTP};
 
 #[pyfunction]
 pub fn generate_totp_secret<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
@@ -20,9 +20,14 @@ pub fn get_totp_code<'py>(py: Python<'py>, secret: &str) -> PyResult<Bound<'py, 
         6,
         1,
         30,
-        BASE64_STANDARD.decode(secret).map_err(|_| PyValueError::new_err("Invalid secret"))?,
-    ).map_err(|_| PyValueError::new_err("Failed to create TOTP"))?;
-    let code = totp.generate_current().map_err(|_| PyValueError::new_err("Failed to generate TOTP code"))?;
+        BASE64_STANDARD
+            .decode(secret)
+            .map_err(|_| PyValueError::new_err("Invalid secret"))?,
+    )
+    .map_err(|_| PyValueError::new_err("Failed to create TOTP"))?;
+    let code = totp
+        .generate_current()
+        .map_err(|_| PyValueError::new_err("Failed to generate TOTP code"))?;
     Ok(PyBytes::new_bound(py, code.as_bytes()))
 }
 
@@ -33,9 +38,13 @@ pub fn verify_totp_code(secret: &str, code: &str) -> PyResult<bool> {
         6,
         1,
         30,
-        BASE64_STANDARD.decode(secret).map_err(|_| PyValueError::new_err("Invalid secret"))?,
-    ).map_err(|_| PyValueError::new_err("Failed to create TOTP"))?;
-    Ok(totp.check_current(code).map_err(|_| PyValueError::new_err("Failed to verify TOTP code"))?)
+        BASE64_STANDARD
+            .decode(secret)
+            .map_err(|_| PyValueError::new_err("Invalid secret"))?,
+    )
+    .map_err(|_| PyValueError::new_err("Failed to create TOTP"))?;
+    totp.check_current(code)
+        .map_err(|_| PyValueError::new_err("Failed to verify TOTP code"))
 }
 
 pub fn generate_totp_secret_bytes() -> Result<Vec<u8>, &'static str> {
@@ -45,19 +54,15 @@ pub fn generate_totp_secret_bytes() -> Result<Vec<u8>, &'static str> {
 }
 
 pub fn get_totp_code_bytes(secret: &[u8]) -> Result<String, &'static str> {
-    let totp = TOTP::new(
-        Algorithm::SHA1,
-        6,
-        1,
-        30,
-        secret.to_vec(),
-    )
-    .map_err(|_| "Failed to create TOTP")?;
-    totp.generate_current().map_err(|_| "Failed to generate TOTP code")
+    let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret.to_vec())
+        .map_err(|_| "Failed to create TOTP")?;
+    totp.generate_current()
+        .map_err(|_| "Failed to generate TOTP code")
 }
 
 pub fn verify_totp_code_bytes(secret: &[u8], code: &str) -> Result<bool, &'static str> {
     let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret.to_vec())
         .map_err(|_| "Failed to create TOTP")?;
-    totp.check_current(code).map_err(|_| "Failed to verify TOTP code")
+    totp.check_current(code)
+        .map_err(|_| "Failed to verify TOTP code")
 }

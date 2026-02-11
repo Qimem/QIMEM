@@ -2,32 +2,65 @@ name: rust-ci
 
 on:
   push:
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.cargo/config.toml'
-      - 'build.rs'
-      - 'scripts/rust-dev-check.sh'
-      - '.github/workflows/rust-ci.yml'
   pull_request:
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.cargo/config.toml'
-      - 'build.rs'
-      - 'scripts/rust-dev-check.sh'
 
 jobs:
   rust-check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: qimem
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d qimem"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/qimem?sslmode=disable
+      QIMEM_AUTH_JWT_SECRET: ci_secret
+      QIMEM_AUTH_ISSUER: qimem
+      QIMEM_AUTH_AUDIENCE: qimem-users
+      QIMEM_MFA_TOTP_SECRET: ci_totp
+      QIMEM_ROOT_KEY_B64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      RUST_LOG: info
+
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install clippy
-        run: rustup component add clippy
-      - name: Run Rust dev checks
-        run: ./scripts/rust-dev-check.sh
+        with:
+          components: rustfmt, clippy
+
+      - name: Copy env template
+        run: cp .env.example .env
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --all-targets
+
+      - name: Start docker compose dependencies
+        run: docker compose up -d postgres
+
+      - name: API smoke test
+        run: |
+          cargo run --bin qimem-api &
+          API_PID=$!
+          for i in {1..20}; do
+            if curl -sf http://localhost:8080/health; then
+              break
+            fi
+            sleep 2
+          done
+          curl -sf http://localhost:8080/health | grep '"status":"ok"'
+          kill "$API_PID"

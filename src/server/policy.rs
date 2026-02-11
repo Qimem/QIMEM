@@ -60,8 +60,8 @@ impl PolicyConfig {
                 .mfa_totp_secret
                 .as_deref()
                 .ok_or(PolicyError::MissingMfaSecret)?;
-            let is_valid = totp::verify_totp_code(secret, code)
-                .map_err(|_| PolicyError::InvalidMfa)?;
+            let is_valid =
+                totp::verify_totp_code(secret, code).map_err(|_| PolicyError::InvalidMfa)?;
             if !is_valid {
                 return Err(PolicyError::InvalidMfa);
             }

@@ -1,0 +1,28 @@
+{
+  "name": "QIMEM Dev",
+  "dockerComposeFile": ["../docker-compose.yml"],
+  "service": "app",
+  "workspaceFolder": "/workspace/QIMEM",
+  "runServices": ["app", "postgres"],
+  "features": {
+    "ghcr.io/devcontainers/features/rust:1": {
+      "version": "stable"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "containerEnv": {
+    "DATABASE_URL": "postgres://postgres:postgres@postgres:5432/qimem?sslmode=disable"
+  },
+  "remoteEnv": {
+    "RUST_LOG": "info"
+  },
+  "postCreateCommand": "cargo build",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  }
+}

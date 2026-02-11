@@ -1,11 +1,13 @@
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-use ed25519_dalek::{Signer, Verifier, Signature, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
-use pyo3::exceptions::PyValueError;
 
 #[pyfunction]
-pub fn generate_keypair<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
+pub fn generate_keypair<'py>(
+    py: Python<'py>,
+) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let mut csprng = OsRng;
     let signing_key = SigningKey::generate(&mut csprng);
     let verifying_key = signing_key.verifying_key();
@@ -16,8 +18,13 @@ pub fn generate_keypair<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, 
 }
 
 #[pyfunction]
-pub fn sign_message<'py>(py: Python<'py>, secret_key: &[u8], message: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
-    let secret_key_array: [u8; 32] = secret_key.try_into()
+pub fn sign_message<'py>(
+    py: Python<'py>,
+    secret_key: &[u8],
+    message: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let secret_key_array: [u8; 32] = secret_key
+        .try_into()
         .map_err(|_| PyValueError::new_err("Secret key must be 32 bytes"))?;
     let signing_key = SigningKey::from_bytes(&secret_key_array);
     let signature = signing_key.sign(message);
@@ -25,29 +32,46 @@ pub fn sign_message<'py>(py: Python<'py>, secret_key: &[u8], message: &[u8]) -> 
 }
 
 #[pyfunction]
-pub fn verify_signature<'py>(_py: Python<'py>, public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResult<bool> {
-    let public_key_array: [u8; 32] = public_key.try_into()
+pub fn verify_signature<'py>(
+    _py: Python<'py>,
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> PyResult<bool> {
+    let public_key_array: [u8; 32] = public_key
+        .try_into()
         .map_err(|_| PyValueError::new_err("Public key must be 32 bytes"))?;
-    let signature_array: [u8; 64] = signature.try_into()
+    let signature_array: [u8; 64] = signature
+        .try_into()
         .map_err(|_| PyValueError::new_err("Signature must be 64 bytes"))?;
     let verifying_key = VerifyingKey::from_bytes(&public_key_array)
         .map_err(|_| PyValueError::new_err("Invalid public key"))?;
-    let signature = Signature::try_from(signature_array)
-        .map_err(|_| PyValueError::new_err("Invalid signature"))?;
+    let signature = Signature::from(signature_array);
     Ok(verifying_key.verify(message, &signature).is_ok())
 }
 
 pub fn sign_message_bytes(secret_key: &[u8], message: &[u8]) -> Result<Vec<u8>, &'static str> {
-    let secret_key_array: [u8; 32] = secret_key.try_into().map_err(|_| "Secret key must be 32 bytes")?;
+    let secret_key_array: [u8; 32] = secret_key
+        .try_into()
+        .map_err(|_| "Secret key must be 32 bytes")?;
     let signing_key = SigningKey::from_bytes(&secret_key_array);
     Ok(signing_key.sign(message).to_bytes().to_vec())
 }
 
-pub fn verify_signature_bytes(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<bool, &'static str> {
-    let public_key_array: [u8; 32] = public_key.try_into().map_err(|_| "Public key must be 32 bytes")?;
-    let signature_array: [u8; 64] = signature.try_into().map_err(|_| "Signature must be 64 bytes")?;
-    let verifying_key = VerifyingKey::from_bytes(&public_key_array).map_err(|_| "Invalid public key")?;
-    let signature = Signature::try_from(signature_array).map_err(|_| "Invalid signature")?;
+pub fn verify_signature_bytes(
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<bool, &'static str> {
+    let public_key_array: [u8; 32] = public_key
+        .try_into()
+        .map_err(|_| "Public key must be 32 bytes")?;
+    let signature_array: [u8; 64] = signature
+        .try_into()
+        .map_err(|_| "Signature must be 64 bytes")?;
+    let verifying_key =
+        VerifyingKey::from_bytes(&public_key_array).map_err(|_| "Invalid public key")?;
+    let signature = Signature::from(signature_array);
     Ok(verifying_key.verify(message, &signature).is_ok())
 }
 
@@ -55,11 +79,16 @@ pub fn generate_keypair_bytes() -> (Vec<u8>, Vec<u8>) {
     let mut csprng = OsRng;
     let signing_key = SigningKey::generate(&mut csprng);
     let verifying_key = signing_key.verifying_key();
-    (verifying_key.as_bytes().to_vec(), signing_key.as_bytes().to_vec())
+    (
+        verifying_key.as_bytes().to_vec(),
+        signing_key.as_bytes().to_vec(),
+    )
 }
 
 pub fn public_key_from_secret(secret_key: &[u8]) -> Result<Vec<u8>, &'static str> {
-    let secret_key_array: [u8; 32] = secret_key.try_into().map_err(|_| "Secret key must be 32 bytes")?;
+    let secret_key_array: [u8; 32] = secret_key
+        .try_into()
+        .map_err(|_| "Secret key must be 32 bytes")?;
     let signing_key = SigningKey::from_bytes(&secret_key_array);
     let verifying_key = signing_key.verifying_key();
     Ok(verifying_key.as_bytes().to_vec())

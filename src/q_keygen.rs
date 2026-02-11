@@ -1,9 +1,13 @@
+#![allow(dead_code)]
+#![allow(clippy::useless_conversion)]
+// Needed for PyO3 macro-generated signatures that trigger Clippy false positives in this crate.
+
+use argon2::{Algorithm, Argon2, Params, Version};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-use argon2::{Argon2, Algorithm, Version, Params};
 use rand::RngCore;
-use sha2::{Sha256, Digest};
-use pyo3::exceptions::PyValueError;
+use sha2::{Digest, Sha256};
 
 #[derive(thiserror::Error, Debug)]
 pub enum KeyGenError {
@@ -11,12 +15,6 @@ pub enum KeyGenError {
     SaltInvalid(String),
     #[error("Hash error: {0}")]
     HashError(String),
-}
-
-impl From<KeyGenError> for PyErr {
-    fn from(err: KeyGenError) -> PyErr {
-        PyValueError::new_err(err.to_string())
-    }
 }
 
 #[pyfunction]
@@ -46,12 +44,12 @@ pub fn derive_key<'py>(
         rand::thread_rng().fill_bytes(&mut salt);
     }
     let params = Params::new(32768, 4, 1, Some(32))
-        .map_err(|e| KeyGenError::HashError(e.to_string()))?;
+        .map_err(|e| PyValueError::new_err(KeyGenError::HashError(e.to_string()).to_string()))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = [0u8; 32];
     argon2
         .hash_password_into(password.as_bytes(), &salt, &mut key)
-        .map_err(|e| KeyGenError::HashError(e.to_string()))?;
+        .map_err(|e| PyValueError::new_err(KeyGenError::HashError(e.to_string()).to_string()))?;
     Ok((PyBytes::new_bound(py, &key), PyBytes::new_bound(py, &salt)))
 }
 
@@ -79,13 +77,13 @@ pub fn derive_key_simple(
     } else {
         rand::thread_rng().fill_bytes(&mut salt);
     }
-    
-    let params = Params::new(32768, 4, 1, Some(32))
-        .map_err(|e| format!("Params error: {}", e))?;
+
+    let params = Params::new(32768, 4, 1, Some(32)).map_err(|e| format!("Params error: {}", e))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = [0u8; 32];
-    argon2.hash_password_into(password.as_bytes(), &salt, &mut key)
+    argon2
+        .hash_password_into(password.as_bytes(), &salt, &mut key)
         .map_err(|e| format!("Hash error: {}", e))?;
-    
+
     Ok((key.to_vec(), salt.to_vec()))
 }

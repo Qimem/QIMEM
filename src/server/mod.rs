@@ -1,8 +1,8 @@
 pub mod auth;
 pub mod db;
 pub mod kms;
-pub mod root_rotation;
 pub mod policy;
+pub mod root_rotation;
 pub mod routes;
 
 pub use auth::{AuthConfig, AuthUser};

@@ -1,8 +1,8 @@
+use crate::file_encryption::{decrypt_file, encrypt_file};
 use crate::q_keygen::derive_key;
-use crate::file_encryption::{encrypt_file, decrypt_file};
 use crate::tests::init_python;
-use pyo3::Python;
 use pyo3::types::PyBytesMethods;
+use pyo3::Python;
 use std::fs;
 use std::io::Read;
 
@@ -28,7 +28,10 @@ fn test_encrypt_decrypt_file() {
         decrypt_file(py, encrypted_path, decrypted_path, key.as_bytes().to_vec()).unwrap();
 
         let mut decrypted_data = Vec::new();
-        fs::File::open(decrypted_path).unwrap().read_to_end(&mut decrypted_data).unwrap();
+        fs::File::open(decrypted_path)
+            .unwrap()
+            .read_to_end(&mut decrypted_data)
+            .unwrap();
 
         assert_eq!(data, decrypted_data.as_slice());
 
