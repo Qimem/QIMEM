@@ -1,4 +1,5 @@
-import { Button, FormField, Panel } from "./ui";
+import { useEffect, useState } from "react";
+import { Button, FormField, Panel, inputClassName } from "./ui";
 
 export function DevAccessPanel({
   jwt,
@@ -11,16 +12,43 @@ export function DevAccessPanel({
   setJwt: (value: string) => void;
   setTenantId: (value: string) => void;
 }) {
+  const [draftJwt, setDraftJwt] = useState(jwt);
+  const [draftTenantId, setDraftTenantId] = useState(tenantId);
+
+  useEffect(() => {
+    setDraftJwt(jwt);
+    setDraftTenantId(tenantId);
+  }, [jwt, tenantId]);
+
   return (
     <Panel title="Dev Access Panel">
       <div className="space-y-3">
         <FormField label="JWT">
-          <input className="w-full rounded-md border border-base-border bg-base-bg p-2 text-sm" value={jwt} onChange={(e) => setJwt(e.target.value)} />
+          <input className={inputClassName} value={draftJwt} onChange={(e) => setDraftJwt(e.target.value)} placeholder="Paste bearer token" />
         </FormField>
         <FormField label="Tenant ID">
-          <input className="w-full rounded-md border border-base-border bg-base-bg p-2 text-sm" value={tenantId} onChange={(e) => setTenantId(e.target.value)} />
+          <input className={inputClassName} value={draftTenantId} onChange={(e) => setDraftTenantId(e.target.value)} placeholder="Tenant UUID" />
         </FormField>
-        <Button>Set Credentials</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={() => {
+              setJwt(draftJwt.trim());
+              setTenantId(draftTenantId.trim());
+            }}
+          >
+            Set Credentials
+          </Button>
+          <Button
+            onClick={() => {
+              setDraftJwt("");
+              setDraftTenantId("");
+              setJwt("");
+              setTenantId("");
+            }}
+          >
+            Clear
+          </Button>
+        </div>
       </div>
     </Panel>
   );

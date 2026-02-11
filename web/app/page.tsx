@@ -25,59 +25,63 @@ const normalizeError = (error: unknown): ApiError => {
 export default function Home() {
   const [jwt, setJwt] = useState("");
   const [tenantId, setTenantId] = useState("");
-  const [error, setError] = useState<ApiError | null>(null);
+  const [globalError, setGlobalError] = useState<ApiError | null>(null);
 
   const client = useMemo(() => createQimemClient({ baseUrl: API_BASE_URL, getCredentials: () => ({ jwt, tenantId }) }), [jwt, tenantId]);
 
   const [plaintext, setPlaintext] = useState("");
   const [encrypted, setEncrypted] = useState<EncryptResponse | null>(null);
   const [decrypted, setDecrypted] = useState("");
+  const [encryptionError, setEncryptionError] = useState<ApiError | null>(null);
 
   const [message, setMessage] = useState("");
   const [signResult, setSignResult] = useState<SignResponse | null>(null);
   const [verifyResult, setVerifyResult] = useState<boolean | null>(null);
+  const [signError, setSignError] = useState<ApiError | null>(null);
 
   const [pqKeypair, setPqKeypair] = useState<PQKeypair | null>(null);
   const [pqSession, setPqSession] = useState<PQSessionResponse | null>(null);
+  const [pqError, setPqError] = useState<ApiError | null>(null);
 
   const [ttlPayload, setTtlPayload] = useState("");
   const [ttl, setTtl] = useState(60);
   const [selfDestruct, setSelfDestruct] = useState<SelfDestructResponse | null>(null);
   const [selfDestructDecryptResult, setSelfDestructDecryptResult] = useState("");
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [selfDestructError, setSelfDestructError] = useState<ApiError | null>(null);
 
   const [activeTenant, setActiveTenant] = useState("Tenant A");
   const [tenantStatus, setTenantStatus] = useState("");
+  const [tenantError, setTenantError] = useState<ApiError | null>(null);
 
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [verification, setVerification] = useState<Record<string, boolean>>({});
+  const [auditError, setAuditError] = useState<ApiError | null>(null);
 
   useEffect(() => {
     if (!selfDestruct?.expires_at) {
       setCountdown(null);
       return;
     }
+    const expiresAt = selfDestruct.expires_at;
+    if (!expiresAt) return;
     const timer = window.setInterval(() => {
-      const left = Math.max(0, Math.ceil(selfDestruct.expires_at! - Date.now() / 1000));
+      const left = Math.max(0, Math.ceil(expiresAt - Date.now() / 1000));
       setCountdown(left);
     }, 1000);
     return () => window.clearInterval(timer);
   }, [selfDestruct]);
 
-  const withError = async (fn: () => Promise<void>) => {
-    setError(null);
-    try {
-      await fn();
-    } catch (e) {
-      setError(normalizeError(e));
-    }
-  };
-
   const verifyAudit = async () => {
     const map: Record<string, boolean> = {};
     for (const entry of audit) {
-      const payload = JSON.stringify({ tenant_id: entry.tenant_id, event_type: entry.event_type, metadata: entry.metadata });
-      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
+      const payload = {
+        tenant_id: entry.tenant_id,
+        event_type: entry.event_type,
+        metadata: entry.metadata,
+        prev_hash: entry.prev_hash_b64 ?? null,
+      };
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(payload)));
       const hash = btoa(String.fromCharCode(...new Uint8Array(digest)));
       map[entry.id] = hash === entry.event_hash_b64;
     }
@@ -91,16 +95,32 @@ export default function Home() {
         <div className="mx-auto max-w-5xl space-y-4">
           <Header />
           <DevAccessPanel jwt={jwt} tenantId={tenantId} setJwt={setJwt} setTenantId={setTenantId} />
-          {error && <ApiResponseViewer data={error} />}
+          {globalError && <ApiResponseViewer data={globalError} />}
 
           <EncryptionLab
             plaintext={plaintext}
             setPlaintext={setPlaintext}
             encrypted={encrypted}
             decrypted={decrypted}
-            onEncrypt={() => withError(async () => setEncrypted(await client.encrypt(plaintext)))}
-            onDecrypt={() => withError(async () => { if (!encrypted) return; setDecrypted(await client.decrypt(encrypted)); })}
-            error={null}
+            onEncrypt={async () => {
+              setEncryptionError(null);
+              try {
+                setEncrypted(await client.encrypt(plaintext));
+                setDecrypted("");
+              } catch (error) {
+                setEncryptionError(normalizeError(error));
+              }
+            }}
+            onDecrypt={async () => {
+              if (!encrypted) return;
+              setEncryptionError(null);
+              try {
+                setDecrypted(await client.decrypt(encrypted));
+              } catch (error) {
+                setEncryptionError(normalizeError(error));
+              }
+            }}
+            error={encryptionError}
           />
 
           <SigningLab
@@ -108,17 +128,48 @@ export default function Home() {
             setMessage={setMessage}
             signResult={signResult}
             verifyResult={verifyResult}
-            onSign={() => withError(async () => setSignResult(await client.sign(message)))}
-            onVerify={() => withError(async () => { if (!signResult) return; setVerifyResult(await client.verify(signResult.signature_b64, message, signResult.public_key_b64)); })}
-            error={null}
+            onSign={async () => {
+              setSignError(null);
+              try {
+                setSignResult(await client.sign(message));
+                setVerifyResult(null);
+              } catch (error) {
+                setSignError(normalizeError(error));
+              }
+            }}
+            onVerify={async () => {
+              if (!signResult) return;
+              setSignError(null);
+              try {
+                setVerifyResult(await client.verify(signResult.signature_b64, message, signResult.public_key_b64));
+              } catch (error) {
+                setSignError(normalizeError(error));
+              }
+            }}
+            error={signError}
           />
 
           <PQSessionDemo
             keypair={pqKeypair}
             session={pqSession}
-            onKeypair={() => withError(async () => setPqKeypair(await client.pqKeypair()))}
-            onSession={() => withError(async () => { if (!pqKeypair) return; setPqSession(await client.pqSession(pqKeypair.public_key_b64)); })}
-            error={null}
+            onKeypair={async () => {
+              setPqError(null);
+              try {
+                setPqKeypair(await client.pqKeypair());
+              } catch (error) {
+                setPqError(normalizeError(error));
+              }
+            }}
+            onSession={async () => {
+              if (!pqKeypair) return;
+              setPqError(null);
+              try {
+                setPqSession(await client.pqSession(pqKeypair.public_key_b64));
+              } catch (error) {
+                setPqError(normalizeError(error));
+              }
+            }}
+            error={pqError}
           />
 
           <SelfDestructDemo
@@ -129,49 +180,84 @@ export default function Home() {
             encrypted={selfDestruct}
             decryptResult={selfDestructDecryptResult}
             countdown={countdown}
-            onEncrypt={() => withError(async () => setSelfDestruct(await client.selfDestruct(ttlPayload, ttl)))}
-            onDecrypt={() =>
-              withError(async () => {
-                if (!selfDestruct) return;
-                const out = await client.selfDestructDecrypt(selfDestruct.ciphertext_b64);
-                setSelfDestructDecryptResult(out.plaintext_b64 ? "Decrypted (base64 response)." : "No plaintext");
-              })
-            }
-            error={null}
+            onEncrypt={async () => {
+              setSelfDestructError(null);
+              try {
+                setSelfDestruct(await client.selfDestruct(ttlPayload, ttl));
+                setSelfDestructDecryptResult("");
+              } catch (error) {
+                setSelfDestructError(normalizeError(error));
+              }
+            }}
+            onDecrypt={async () => {
+              if (!selfDestruct) return;
+              setSelfDestructError(null);
+              try {
+                await client.selfDestructDecrypt(selfDestruct.ciphertext_b64);
+                setSelfDestructDecryptResult("Decrypt accepted by API (payload intentionally not persisted).");
+              } catch (error) {
+                const normalized = normalizeError(error);
+                setSelfDestructError(normalized);
+                setSelfDestructDecryptResult(`Decrypt rejected by API (${normalized.status}).`);
+              }
+            }}
+            error={selfDestructError}
           />
 
           <TenantIsolationSimulator
             activeTenant={activeTenant}
             setActiveTenant={setActiveTenant}
             status={tenantStatus}
-            onRun={() =>
-              withError(async () => {
+            onRun={async () => {
+              setTenantError(null);
+              setTenantStatus("");
+              try {
                 const encryptedA = await client.encrypt("tenant-isolation-test");
+                const tenantVariant = activeTenant === "Tenant A" ? "tenant-b" : "tenant-a";
                 const tenantBClient = createQimemClient({
                   baseUrl: API_BASE_URL,
-                  getCredentials: () => ({ jwt, tenantId: activeTenant === "Tenant A" ? `${tenantId}-B` : `${tenantId}-A` }),
+                  getCredentials: () => ({ jwt, tenantId: `${tenantId}-${tenantVariant}` }),
                 });
                 await tenantBClient.decrypt(encryptedA);
-                setTenantStatus("Unexpected success; inspect tenant settings.");
-              })
-            }
-            error={null}
+                setTenantStatus("Unexpected decrypt success. Check API tenant enforcement configuration.");
+              } catch (error) {
+                const normalized = normalizeError(error);
+                setTenantError(normalized);
+                setTenantStatus(`Expected rejection confirmed (${normalized.status}).`);
+              }
+            }}
+            error={tenantError}
           />
 
           <AuditChainViewer
             entries={audit}
             verification={verification}
-            onRefresh={() => withError(async () => setAudit(await client.getAuditChain()))}
-            onVerify={() => withError(async () => verifyAudit())}
-            error={null}
+            onRefresh={async () => {
+              setAuditError(null);
+              try {
+                setAudit(await client.getAuditChain());
+              } catch (error) {
+                setAuditError(normalizeError(error));
+              }
+            }}
+            onVerify={async () => {
+              setAuditError(null);
+              try {
+                await verifyAudit();
+              } catch (error) {
+                setAuditError(normalizeError(error));
+              }
+            }}
+            error={auditError}
           />
 
           <Panel title="Help & Info">
             <ul className="list-disc space-y-1 pl-5 text-sm text-slate-300">
-              <li>Each panel maps directly to a QIMEM API call path and displays live JSON responses.</li>
-              <li>JWT and tenant ID live in memory only; this app does not use localStorage/sessionStorage.</li>
-              <li>Decrypted plaintext is rendered to UI only and not logged/persisted.</li>
-              <li>Mock Provider Reverses Prompt for Safe Demos: use only for synthetic demonstration workflows.</li>
+              <li>All cryptographic operations are performed by the QIMEM API using live endpoints.</li>
+              <li>JWT and tenant ID are in-memory only and are never persisted to browser storage.</li>
+              <li>Decrypted plaintext is only displayed in-session and never written to logs or local storage.</li>
+              <li>Audit verification is a demo integrity check that recomputes a client-side SHA-256 chain.</li>
+              <li>Mock Provider Reverses Prompt for Safe Demos: only for synthetic safe demonstrations.</li>
             </ul>
           </Panel>
         </div>
