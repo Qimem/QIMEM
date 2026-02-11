@@ -78,7 +78,7 @@ async fn connect_with_retry(database_url: &str, attempts: usize, delay: Duration
 async fn wait_for_healthcheck(pool: &PgPool, attempts: usize, delay: Duration) {
     let mut last_err = None;
     for _ in 0..attempts {
-        match sqlx::query_scalar::<_, i64>("SELECT 1").fetch_one(pool).await {
+        match sqlx::query_scalar::<_, i64>("SELECT 1::BIGINT").fetch_one(pool).await {
             Ok(_) => return,
             Err(err) => {
                 last_err = Some(err);

@@ -168,7 +168,7 @@ impl KmsService {
             .map_err(|_| KmsError::TenantNotFound)?;
         let master_version = self
             .db
-            .fetch_master_key_version(tenant_id, tenant.key_version as i32)
+            .fetch_master_key_version(tenant_id, tenant.key_version as i64)
             .await
             .map_err(|_| KmsError::KeyVersionNotFound)?;
         let mut master_key = unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
@@ -217,7 +217,7 @@ impl KmsService {
             .map_err(|_| KmsError::TenantNotFound)?;
         let master_version = self
             .db
-            .fetch_master_key_version(tenant_id, request.key_version as i32)
+            .fetch_master_key_version(tenant_id, request.key_version as i64)
             .await
             .map_err(|_| KmsError::KeyVersionNotFound)?;
         let mut master_key = unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
@@ -269,7 +269,7 @@ impl KmsService {
             .map_err(|_| KmsError::TenantNotFound)?;
         let master_version = self
             .db
-            .fetch_master_key_version(tenant_id, tenant.key_version as i32)
+            .fetch_master_key_version(tenant_id, tenant.key_version as i64)
             .await
             .map_err(|_| KmsError::KeyVersionNotFound)?;
         let mut master_key = unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
@@ -298,7 +298,7 @@ impl KmsService {
             .map_err(|_| KmsError::TenantNotFound)?;
         let master_version = self
             .db
-            .fetch_master_key_version(tenant_id, key_version as i32)
+            .fetch_master_key_version(tenant_id, key_version as i64)
             .await
             .map_err(|_| KmsError::KeyVersionNotFound)?;
         let mut master_key = unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
@@ -322,11 +322,11 @@ impl KmsService {
         let next_version = tenant.key_version + 1;
         let now = chrono::Utc::now().naive_utc();
         self.db
-            .insert_master_key_version(tenant_id, next_version as i32, &wrapped_master_key, now)
+            .insert_master_key_version(tenant_id, next_version as i64, &wrapped_master_key, now)
             .await
             .map_err(|_| KmsError::CryptoError)?;
         self.db
-            .update_tenant_key_version(tenant_id, next_version as i32, now)
+            .update_tenant_key_version(tenant_id, next_version as i64, now)
             .await
             .map_err(|_| KmsError::CryptoError)?;
         let prev_hash = self
@@ -375,7 +375,7 @@ impl KmsService {
             .map_err(|_| KmsError::TenantNotFound)?;
         let master_version = self
             .db
-            .fetch_master_key_version(tenant_id, tenant.key_version as i32)
+            .fetch_master_key_version(tenant_id, tenant.key_version as i64)
             .await
             .map_err(|_| KmsError::KeyVersionNotFound)?;
         let mut master_key = unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
@@ -434,7 +434,7 @@ impl KmsService {
             .map_err(|_| KmsError::TenantNotFound)?;
         let master_version = self
             .db
-            .fetch_master_key_version(tenant_id, key_version as i32)
+            .fetch_master_key_version(tenant_id, key_version as i64)
             .await
             .map_err(|_| KmsError::KeyVersionNotFound)?;
         let mut master_key = unwrap_key(&master_version.wrapped_master_key, self.root_key.expose())?;
@@ -596,7 +596,7 @@ pub async fn rotate_root_key(options: RootRotationOptions) -> Result<RootRotatio
             rotation_id,
             started_at,
             Some(started_at),
-            tenant_ids.len() as i32,
+            tenant_ids.len() as i64,
             true,
         )
         .await
@@ -628,12 +628,12 @@ pub async fn rotate_root_key(options: RootRotationOptions) -> Result<RootRotatio
         let mut master_key = unwrap_key(&version.wrapped_master_key, old_root.expose())?;
         let wrapped_new = wrap_key(&master_key, new_root.expose())?;
         master_key.zeroize();
-        db.update_master_key_version(version.tenant_id, version.version as i32, &wrapped_new)
+        db.update_master_key_version(version.tenant_id, version.version as i64, &wrapped_new)
             .await
             .map_err(|_| KmsError::CryptoError)?;
         db.update_tenant_wrapped_master_key_for_version(
             version.tenant_id,
-            version.version as i32,
+            version.version as i64,
             &wrapped_new,
         )
         .await
@@ -661,7 +661,7 @@ pub async fn rotate_root_key(options: RootRotationOptions) -> Result<RootRotatio
         rotation_id,
         started_at,
         Some(completed_at),
-        tenant_ids.len() as i32,
+        tenant_ids.len() as i64,
         false,
     )
     .await
