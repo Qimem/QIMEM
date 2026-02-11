@@ -26,8 +26,8 @@ impl DbState {
         .bind(tenant.id)
         .bind(&tenant.name)
         .bind(&tenant.wrapped_master_key)
-        .bind(tenant.key_version as i32)
-        .bind(tenant.crypto_policy_version as i32)
+        .bind(tenant.key_version as i64)
+        .bind(tenant.crypto_policy_version as i64)
         .bind(tenant.created_at)
         .bind(tenant.updated_at)
         .execute(&self.pool)
@@ -39,7 +39,7 @@ impl DbState {
     pub async fn insert_master_key_version(
         &self,
         tenant_id: Uuid,
-        version: i32,
+        version: i64,
         wrapped_master_key: &[u8],
         created_at: chrono::NaiveDateTime,
     ) -> Result<(), sqlx::Error> {
@@ -69,8 +69,8 @@ impl DbState {
             id: row.get("id"),
             name: row.get("name"),
             wrapped_master_key: row.get("wrapped_master_key"),
-            key_version: row.get::<i32, _>("key_version") as u32,
-            crypto_policy_version: row.get::<i32, _>("crypto_policy_version") as u32,
+            key_version: row.get::<i64, _>("key_version") as u32,
+            crypto_policy_version: row.get::<i64, _>("crypto_policy_version") as u32,
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         })
@@ -79,7 +79,7 @@ impl DbState {
     pub async fn fetch_master_key_version(
         &self,
         tenant_id: Uuid,
-        version: i32,
+        version: i64,
     ) -> Result<TenantKeyVersion, sqlx::Error> {
         let row = sqlx::query(
             "SELECT tenant_id, version, wrapped_master_key, created_at
@@ -92,7 +92,7 @@ impl DbState {
 
         Ok(TenantKeyVersion {
             tenant_id: row.get("tenant_id"),
-            version: row.get::<i32, _>("version") as u32,
+            version: row.get::<i64, _>("version") as u32,
             wrapped_master_key: row.get("wrapped_master_key"),
             created_at: row.get("created_at"),
         })
@@ -108,7 +108,7 @@ impl DbState {
             .into_iter()
             .map(|row| TenantKeyVersion {
                 tenant_id: row.get("tenant_id"),
-                version: row.get::<i32, _>("version") as u32,
+                version: row.get::<i64, _>("version") as u32,
                 wrapped_master_key: row.get("wrapped_master_key"),
                 created_at: row.get("created_at"),
             })
@@ -118,7 +118,7 @@ impl DbState {
     pub async fn update_master_key_version(
         &self,
         tenant_id: Uuid,
-        version: i32,
+        version: i64,
         wrapped_master_key: &[u8],
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
@@ -148,7 +148,7 @@ impl DbState {
     pub async fn update_tenant_wrapped_master_key_for_version(
         &self,
         tenant_id: Uuid,
-        key_version: i32,
+        key_version: i64,
         wrapped_master_key: &[u8],
     ) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE tenants SET wrapped_master_key = $1 WHERE id = $2 AND key_version = $3")
@@ -163,7 +163,7 @@ impl DbState {
     pub async fn update_tenant_key_version(
         &self,
         tenant_id: Uuid,
-        key_version: i32,
+        key_version: i64,
         updated_at: chrono::NaiveDateTime,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
@@ -264,7 +264,7 @@ impl DbState {
         id: Uuid,
         started_at: chrono::NaiveDateTime,
         completed_at: Option<chrono::NaiveDateTime>,
-        tenant_count: i32,
+        tenant_count: i64,
         dry_run: bool,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(

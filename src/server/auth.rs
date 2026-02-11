@@ -30,10 +30,10 @@ impl AuthConfig {
                 auth_disabled,
             });
         }
-        let jwt_secret = env::var("BETTER_AUTH_JWT_SECRET")
-            .map_err(|_| AuthError::MissingConfig("BETTER_AUTH_JWT_SECRET"))?;
-        let issuer = env::var("BETTER_AUTH_ISSUER").ok();
-        let audience = env::var("BETTER_AUTH_AUDIENCE").ok();
+        let jwt_secret = env::var("QIMEM_AUTH_JWT_SECRET")
+            .map_err(|_| AuthError::MissingConfig("QIMEM_AUTH_JWT_SECRET"))?;
+        let issuer = env::var("QIMEM_AUTH_ISSUER").ok();
+        let audience = env::var("QIMEM_AUTH_AUDIENCE").ok();
         Ok(Self {
             jwt_secret,
             issuer,

@@ -1,0 +1,33 @@
+name: rust-ci
+
+on:
+  push:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/config.toml'
+      - 'build.rs'
+      - 'scripts/rust-dev-check.sh'
+      - '.github/workflows/rust-ci.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/config.toml'
+      - 'build.rs'
+      - 'scripts/rust-dev-check.sh'
+
+jobs:
+  rust-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install clippy
+        run: rustup component add clippy
+      - name: Run Rust dev checks
+        run: ./scripts/rust-dev-check.sh

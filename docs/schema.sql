@@ -2,15 +2,17 @@ CREATE TABLE tenants (
   id UUID PRIMARY KEY,
   name TEXT NOT NULL,
   wrapped_master_key BYTEA NOT NULL,
-  key_version INT NOT NULL DEFAULT 1,
-  crypto_policy_version INT NOT NULL DEFAULT 1,
+  -- BIGINT aligns with Rust-side i64 DB bindings to avoid INT4/INT8 decode mismatch.
+  key_version BIGINT NOT NULL DEFAULT 1,
+  crypto_policy_version BIGINT NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL,
   updated_at TIMESTAMP NOT NULL
 );
 
 CREATE TABLE tenant_master_key_versions (
   tenant_id UUID REFERENCES tenants(id),
-  version INT NOT NULL,
+  -- Version counters are BIGINT for consistent Rust i64 compatibility.
+  version BIGINT NOT NULL,
   wrapped_master_key BYTEA NOT NULL,
   created_at TIMESTAMP NOT NULL,
   PRIMARY KEY (tenant_id, version)
@@ -38,6 +40,7 @@ CREATE TABLE root_key_rotations (
   id UUID PRIMARY KEY,
   started_at TIMESTAMP NOT NULL,
   completed_at TIMESTAMP,
-  tenant_count INT NOT NULL,
+  -- Counters are BIGINT to match i64 across SQLx decode paths.
+  tenant_count BIGINT NOT NULL,
   dry_run BOOLEAN NOT NULL
 );
