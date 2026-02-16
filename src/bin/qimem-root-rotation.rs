@@ -5,8 +5,19 @@ use qimem::server::root_rotation::execute_root_rotation;
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
     dotenv().ok();
+
     let dry_run = env::args().any(|arg| arg == "--dry-run");
+    let root_rotation_enabled = env::var("QIMEM_ROOT_ROTATION_ENABLED")
+        .map(|value| value == "true" || value == "1")
+        .unwrap_or(false);
+
+    if !root_rotation_enabled {
+        log::info!("Root rotation disabled; skipping");
+        return;
+    }
+
     let enable_destructive = env::var("ENABLE_DESTRUCTIVE_ROTATION")
         .map(|value| value == "true" || value == "1")
         .unwrap_or(false);
@@ -20,8 +31,7 @@ async fn main() {
             );
         }
         Err(err) => {
-            eprintln!("Root rotation failed: {err}");
-            std::process::exit(1);
+            log::warn!("Root rotation skipped/failed: {err}");
         }
     }
 }

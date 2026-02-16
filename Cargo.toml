@@ -45,6 +45,9 @@ sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "macros", "mi
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 subtle = "2.6"
 dotenvy = "0.15"
+log = "0.4"
+env_logger = "0.11"
+config = "0.14"
 
 [dev-dependencies]
 sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "macros", "migrate", "tls-rustls"] }

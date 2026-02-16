@@ -20,29 +20,28 @@ pub struct AuthConfig {
 
 impl AuthConfig {
     pub fn from_env() -> Result<Self, AuthError> {
-        let auth_disabled = env::var("QIMEM_AUTH_DISABLED")
+        let auth_disabled_flag = env::var("QIMEM_AUTH_DISABLED")
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-        if auth_disabled {
-            return Ok(Self {
-                jwt_secret: String::new(),
-                issuer: String::new(),
-                audience: String::new(),
-                mfa_totp_secret: None,
-                auth_disabled,
-            });
-        }
-        let jwt_secret = env::var("QIMEM_AUTH_JWT_SECRET")
-            .map_err(|_| AuthError::MissingConfig("QIMEM_AUTH_JWT_SECRET"))?;
-        let issuer = env::var("QIMEM_AUTH_ISSUER")
-            .map_err(|_| AuthError::MissingConfig("QIMEM_AUTH_ISSUER"))?;
-        let audience = env::var("QIMEM_AUTH_AUDIENCE")
-            .map_err(|_| AuthError::MissingConfig("QIMEM_AUTH_AUDIENCE"))?;
+
+        let jwt_secret = env::var("QIMEM_AUTH_JWT_SECRET").ok();
+        let issuer = env::var("QIMEM_AUTH_ISSUER").ok();
+        let audience = env::var("QIMEM_AUTH_AUDIENCE").ok();
         let mfa_totp_secret = env::var("QIMEM_MFA_TOTP_SECRET").ok();
+
+        let missing_required = jwt_secret.is_none() || issuer.is_none() || audience.is_none();
+        let auth_disabled = auth_disabled_flag || missing_required;
+
+        if missing_required && !auth_disabled_flag {
+            log::warn!(
+                "Auth not fully configured; running without login features (set QIMEM_AUTH_JWT_SECRET, QIMEM_AUTH_ISSUER, QIMEM_AUTH_AUDIENCE to enable)"
+            );
+        }
+
         Ok(Self {
-            jwt_secret,
-            issuer,
-            audience,
+            jwt_secret: jwt_secret.unwrap_or_default(),
+            issuer: issuer.unwrap_or_default(),
+            audience: audience.unwrap_or_default(),
             mfa_totp_secret,
             auth_disabled,
         })

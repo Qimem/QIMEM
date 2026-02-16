@@ -4,6 +4,7 @@ pub mod kms;
 pub mod policy;
 pub mod root_rotation;
 pub mod routes;
+pub mod settings;
 
 pub use auth::{AuthConfig, AuthUser};
 pub use db::DbState;
