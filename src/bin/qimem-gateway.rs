@@ -4,7 +4,10 @@ use std::net::SocketAddr;
 use axum::extract::{FromRef, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::{routing::post, Json, Router};
+use axum::{
+    routing::{get, post},
+    Json, Router,
+};
 use reqwest::header::HeaderMap as ReqwestHeaderMap;
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
@@ -12,12 +15,13 @@ use uuid::Uuid;
 use zeroize::Zeroize;
 
 use qimem::server::auth::{AuthConfig, AuthError, AuthUser};
+use qimem::server::settings::Settings;
 use qimem::server::KmsService;
 
 #[derive(Clone, Debug)]
 struct GatewayState {
     auth: AuthConfig,
-    kms: KmsService,
+    kms: Option<KmsService>,
 }
 
 impl FromRef<GatewayState> for AuthConfig {
@@ -49,58 +53,51 @@ struct ProxyResponse {
     response: String,
 }
 
-#[derive(Debug, thiserror::Error)]
-enum GatewayStartupError {
-    #[error("Missing QIMEM authentication configuration: {0}")]
-    Auth(#[from] AuthError),
-    #[error("Missing or invalid KMS configuration")]
-    Kms,
-    #[error("Invalid host/port")]
-    Addr,
-    #[error("Failed to bind listener: {0}")]
-    Bind(std::io::Error),
-    #[error("Server error: {0}")]
-    Serve(std::io::Error),
-}
-
 #[tokio::main]
 async fn main() {
+    env_logger::init();
     if let Err(err) = run().await {
         eprintln!("{err}");
         std::process::exit(1);
     }
 }
 
-async fn run() -> Result<(), GatewayStartupError> {
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
-    let host = env::var("QIMEM_GATEWAY_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+
+    let settings = Settings::load();
+    let host = env::var("QIMEM_GATEWAY_HOST").unwrap_or(settings.server.host);
     let port: u16 = env::var("QIMEM_GATEWAY_PORT")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(8081);
 
     let auth = AuthConfig::from_env()?;
-    let kms = KmsService::from_env()
-        .await
-        .map_err(|_| GatewayStartupError::Kms)?;
+    let kms = match KmsService::from_env().await {
+        Ok(kms) => Some(kms),
+        Err(_) => {
+            log::warn!("DB/KMS config missing; gateway proxy features disabled");
+            None
+        }
+    };
 
     let state = GatewayState { auth, kms };
 
     let app = Router::new()
+        .route("/health", get(health))
         .route("/v1/gateway/proxy", post(proxy_handler))
         .with_state(state);
 
-    let addr: SocketAddr = format!("{}:{}", host, port)
-        .parse()
-        .map_err(|_| GatewayStartupError::Addr)?;
-    println!("QIMEM Gateway listening on {}", addr);
+    let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
+    log::info!("QIMEM Gateway listening on {addr}");
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(GatewayStartupError::Bind)?;
-    axum::serve(listener, app)
-        .await
-        .map_err(GatewayStartupError::Serve)
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+async fn health() -> &'static str {
+    "ok"
 }
 
 async fn proxy_handler(
@@ -109,6 +106,11 @@ async fn proxy_handler(
     user: AuthUser,
     Json(payload): Json<ProxyRequest>,
 ) -> Result<Json<ProxyResponse>, GatewayError> {
+    let kms = state
+        .kms
+        .as_ref()
+        .ok_or(GatewayError::ServiceUnavailable("KMS not configured"))?;
+
     let tenant_id = extract_tenant_id(&headers, &user)?;
     let algorithm_ok = payload
         .algorithm
@@ -119,8 +121,7 @@ async fn proxy_handler(
     if !algorithm_ok {
         return Err(GatewayError::InvalidInput("Unsupported algorithm"));
     }
-    let mut plaintext = state
-        .kms
+    let mut plaintext = kms
         .decrypt_for_gateway(
             tenant_id,
             payload.wrapped_dek.clone(),
@@ -130,14 +131,12 @@ async fn proxy_handler(
             payload.key_version,
         )
         .await
-        .map_err(|_| GatewayError::Crypto("Decryption failed"))?;
+        .map_err(|_| GatewayError::Crypto("Decrypt failed"))?;
 
     let provider_response = match payload.provider.as_str() {
-        "mock" => {
-            plaintext.reverse();
-            String::from_utf8_lossy(&plaintext).to_string()
-        }
-        "custom" => {
+        "echo" => String::from_utf8(plaintext.to_vec())
+            .map_err(|_| GatewayError::Crypto("Invalid UTF-8 plaintext"))?,
+        "http" => {
             let endpoint = payload
                 .provider_config
                 .endpoint
@@ -171,17 +170,15 @@ async fn proxy_handler(
         _ => return Err(GatewayError::InvalidInput("Unsupported provider")),
     };
 
-    state
-        .kms
-        .log_gateway_decrypt(
-            tenant_id,
-            serde_json::json!({
-                "provider": payload.provider,
-                "key_version": payload.key_version,
-            }),
-        )
-        .await
-        .map_err(|_| GatewayError::Crypto("Audit write failed"))?;
+    kms.log_gateway_decrypt(
+        tenant_id,
+        serde_json::json!({
+            "provider": payload.provider,
+            "key_version": payload.key_version,
+        }),
+    )
+    .await
+    .map_err(|_| GatewayError::Crypto("Audit write failed"))?;
 
     plaintext.zeroize();
 
@@ -220,6 +217,7 @@ fn extract_tenant_id(headers: &HeaderMap, user: &AuthUser) -> Result<Uuid, Gatew
 enum GatewayError {
     InvalidInput(&'static str),
     Crypto(&'static str),
+    ServiceUnavailable(&'static str),
     Auth(AuthError),
 }
 
@@ -228,6 +226,7 @@ impl IntoResponse for GatewayError {
         let (status, message) = match self {
             GatewayError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
             GatewayError::Crypto(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            GatewayError::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
             GatewayError::Auth(err) => {
                 let _ = err.to_string();
                 (StatusCode::UNAUTHORIZED, "Unauthorized")

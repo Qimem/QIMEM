@@ -6,6 +6,13 @@ mod q_core;
 mod q_keygen;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if let Err(e) = run_cli() {
+        eprintln!("Error: {:?}", e);
+    }
+    Ok(())
+}
+
+fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
     println!("--- QIMEM CLI ---");
 
     print!("Enter a password to derive a key: ");

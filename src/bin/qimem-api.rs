@@ -1,82 +1,135 @@
-use std::env;
 use std::net::SocketAddr;
 
-use axum::middleware;
-use dotenvy::dotenv;
-use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
-use tower_http::cors::{Any, CorsLayer};
-use tower_http::trace::TraceLayer;
+use axum::{
+    routing::{get, post},
+    Json, Router,
+};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-use qimem::server::{policy_middleware, router, AppState, AuthConfig, KmsService, PolicyConfig};
+use qimem::q_core;
+use qimem::server::settings::Settings;
 
 #[derive(Debug, thiserror::Error)]
-enum ApiStartupError {
-    #[error("Missing QIMEM authentication configuration: {0}")]
-    Auth(#[from] qimem::server::auth::AuthError),
-    #[error("Missing or invalid KMS configuration")]
-    Kms,
-    #[error("Failed to build rate limiter")]
-    RateLimiter,
-    #[error("Invalid host/port")]
-    Addr,
-    #[error("Failed to bind listener: {0}")]
-    Bind(std::io::Error),
-    #[error("Server error: {0}")]
-    Serve(std::io::Error),
+enum ApiError {
+    #[error("invalid input: {0}")]
+    InvalidInput(&'static str),
+    #[error("crypto error")]
+    Crypto,
+    #[error("utf8 error")]
+    Utf8,
+}
+
+impl axum::response::IntoResponse for ApiError {
+    fn into_response(self) -> axum::response::Response {
+        (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": self.to_string() })),
+        )
+            .into_response()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct EncryptRequest {
+    data: String,
+    key: String,
+}
+
+#[derive(Debug, Serialize)]
+struct EncryptResponse {
+    encrypted: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DecryptRequest {
+    data: String,
+    key: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DecryptResponse {
+    decrypted: String,
 }
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
+
     if let Err(err) = run().await {
         eprintln!("{err}");
         std::process::exit(1);
     }
 }
 
-async fn run() -> Result<(), ApiStartupError> {
-    dotenv().ok();
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+    let settings = Settings::load();
 
-    let host = env::var("QIMEM_API_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-    let port: u16 = env::var("QIMEM_API_PORT")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(8080);
+    if settings.auth.jwt_secret.is_none() {
+        log::warn!("Auth not configured; running without login features");
+    }
 
-    let auth = AuthConfig::from_env()?;
-    let policy = PolicyConfig::from_env();
-    let kms = KmsService::from_env()
-        .await
-        .map_err(|_| ApiStartupError::Kms)?;
+    if std::env::var("DATABASE_URL").is_err() {
+        log::warn!("DB config missing; skipping migrations");
+    }
 
-    let state = AppState { auth, policy, kms };
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/encrypt", post(encrypt_handler))
+        .route("/decrypt", post(decrypt_handler));
 
-    let rate_limit = GovernorConfigBuilder::default()
-        .burst_size(60)
-        .per_second(1)
-        .use_headers()
-        .finish()
-        .ok_or(ApiStartupError::RateLimiter)?;
+    let addr: SocketAddr = format!("{}:{}", settings.server.host, settings.server.port).parse()?;
+    log::info!("QIMEM API listening on {addr}");
 
-    let app = router(state.clone())
-        .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::new().allow_origin(Any).allow_headers(Any))
-        .layer(GovernorLayer {
-            config: rate_limit.into(),
-        })
-        .layer(middleware::from_fn_with_state(
-            state.policy.clone(),
-            policy_middleware,
-        ));
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
 
-    let addr: SocketAddr = format!("{}:{}", host, port)
-        .parse()
-        .map_err(|_| ApiStartupError::Addr)?;
-    println!("QIMEM API listening on {}", addr);
+async fn health() -> &'static str {
+    "ok"
+}
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(ApiStartupError::Bind)?;
-    axum::serve(listener, app)
-        .await
-        .map_err(ApiStartupError::Serve)
+fn derive_key_material(key_seed: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(key_seed.as_bytes());
+    let digest = hasher.finalize();
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&digest);
+    key
+}
+
+async fn encrypt_handler(
+    Json(payload): Json<EncryptRequest>,
+) -> Result<Json<EncryptResponse>, ApiError> {
+    if payload.data.is_empty() || payload.key.is_empty() {
+        return Err(ApiError::InvalidInput("data and key are required"));
+    }
+
+    let key = derive_key_material(&payload.key);
+    let encrypted =
+        q_core::encrypt_simple(payload.data.as_bytes(), &key).map_err(|_| ApiError::Crypto)?;
+
+    Ok(Json(EncryptResponse {
+        encrypted: STANDARD.encode(encrypted),
+    }))
+}
+
+async fn decrypt_handler(
+    Json(payload): Json<DecryptRequest>,
+) -> Result<Json<DecryptResponse>, ApiError> {
+    if payload.data.is_empty() || payload.key.is_empty() {
+        return Err(ApiError::InvalidInput("data and key are required"));
+    }
+
+    let key = derive_key_material(&payload.key);
+    let ciphertext = STANDARD
+        .decode(payload.data)
+        .map_err(|_| ApiError::InvalidInput("data must be base64 ciphertext"))?;
+    let decrypted = q_core::decrypt_simple(&ciphertext, &key).map_err(|_| ApiError::Crypto)?;
+    let decrypted = String::from_utf8(decrypted).map_err(|_| ApiError::Utf8)?;
+
+    Ok(Json(DecryptResponse { decrypted }))
 }
