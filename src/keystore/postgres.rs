@@ -14,7 +14,10 @@ impl PostgresKeyStore {
     /// Connects and runs migrations.
     pub async fn connect(database_url: &str) -> Result<Self> {
         let pool = PgPool::connect(database_url).await?;
-        sqlx::migrate!("./migrations").run(&pool).await.map_err(|err| QimemError::Config(format!("migration failed: {err}")))?;
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .map_err(|err| QimemError::Config(format!("migration failed: {err}")))?;
         Ok(Self { pool })
     }
 }
