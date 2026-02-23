@@ -52,6 +52,7 @@ curl -fsS http://localhost:8080/health
 KEY_ID=$(curl -fsS -X POST http://localhost:8080/keys \
   -H 'content-type: application/json' \
   -d '{}' | jq -r '.key_id')
+# Response shape: {"key_id":"<uuid>"}
 
 # Encrypt (request field is `input`)
 ENVELOPE=$(curl -fsS -X POST http://localhost:8080/encrypt \
@@ -62,6 +63,7 @@ ENVELOPE=$(curl -fsS -X POST http://localhost:8080/encrypt \
 curl -fsS -X POST http://localhost:8080/decrypt \
   -H 'content-type: application/json' \
   -d "{\"input\":\"${ENVELOPE}\"}"
+# Response shape: {"plaintext":"hello"}
 ```
 
 ## Production considerations

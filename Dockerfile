@@ -6,6 +6,9 @@ COPY migrations ./migrations
 RUN cargo build --release --bin qimem-api --features stateful && strip target/release/qimem-api
 
 FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
 RUN useradd -m -u 10001 qimem
 WORKDIR /app
 COPY --from=builder /app/target/release/qimem-api /usr/local/bin/qimem-api

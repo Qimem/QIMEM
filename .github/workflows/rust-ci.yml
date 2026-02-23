@@ -24,11 +24,6 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/qimem?sslmode=disable
-      QIMEM_AUTH_JWT_SECRET: ci_secret
-      QIMEM_AUTH_ISSUER: qimem
-      QIMEM_AUTH_AUDIENCE: qimem-users
-      QIMEM_MFA_TOTP_SECRET: ci_totp
-      QIMEM_ROOT_KEY_B64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
       RUST_LOG: info
 
     steps:
@@ -44,7 +39,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Tests
         run: cargo test --all-targets
