@@ -1,9 +1,10 @@
 {
   "name": "QIMEM Dev",
   "dockerComposeFile": ["../docker-compose.yml"],
-  "service": "qimem-api",
+  "service": "devcontainer",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
-  "runServices": ["qimem-api", "postgres"],
+  "runServices": ["devcontainer", "postgres"],
+  "forwardPorts": [8080, 5432],
   "features": {
     "ghcr.io/devcontainers/features/rust:1": {
       "version": "stable"
