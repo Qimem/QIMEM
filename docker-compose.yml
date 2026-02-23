@@ -13,11 +13,9 @@ services:
       timeout: 5s
       retries: 20
 
-  qimem-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    tty: true # Important: keeps the container alive for you to code in
+ qimem-api:
+  image: ://mcr.microsoft.com
+  tty: true
     depends_on:
       postgres:
         condition: service_healthy
