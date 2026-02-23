@@ -1,68 +1,53 @@
-# QIMEM MVP
+# QIMEM — Deterministic Encryption & Key Lifecycle Engine
 
-QIMEM ships multiple binaries and a lightweight dashboard client.
+## What it is
+QIMEM is a focused encryption engine for deterministic, versioned, auditable envelope encryption and key lifecycle management.
 
-## Binaries
+## What it is not
+QIMEM does not provide authentication, identity, authorization, or plugin frameworks.
 
-- `qimem` — interactive CLI crypto demo.
-- `qimem-api` — minimal API (`/health`, `/encrypt`, `/decrypt`) with optional auth/db config.
-- `qimem-gateway` — gateway with `/health` and proxy route; runs even when KMS/db are not configured.
-- `qimem-root-rotation` — rotation worker; disabled by default.
+## Architecture
+- `qimem` library: crypto engine, envelope format, key store traits, in-memory store, optional Postgres store (`stateful` feature).
+- `qimem-api` binary: Axum HTTP API for key lifecycle and encryption operations.
+- `qimem` binary: CLI for key generation, encryption, decryption, and rotation.
 
-## Quick start (under 2 minutes)
+## Envelope spec
+Envelope v1 fields:
+- `version: u8`
+- `algorithm: Algorithm`
+- `key_id: Uuid`
+- `nonce: Vec<u8>`
+- `ciphertext: Vec<u8>`
+- `tag: Vec<u8>`
 
+Serialization:
+- Deterministic binary format via `serialize_binary` / `deserialize_binary`
+- Deterministic JSON format via `serialize_json` / `deserialize_json`
+
+Validation:
+- Version must be `1`
+- Algorithm ID must be known
+- Tampered payloads fail with structured decryption errors
+
+## Key rotation design
+- Rotation creates a new active key record and deactivates the old key.
+- Old keys remain available for decrypt compatibility.
+- Inactive keys are rejected for encryption.
+
+## Running locally
 ```bash
 cp .env.example .env
-cargo build
 cargo run --bin qimem-api
 ```
 
-In a second terminal:
-
+## Running with Docker
 ```bash
-curl -s http://127.0.0.1:8080/health
-curl -s http://127.0.0.1:8080/encrypt \
-  -H 'content-type: application/json' \
-  -d '{"data":"hello","key":"demo-key"}'
+docker compose up --build
+curl -fsS http://localhost:8080/health
 ```
 
-## Run the CLI
-
-```bash
-cargo run --bin qimem
-```
-
-## Run gateway
-
-```bash
-cargo run --bin qimem-gateway
-```
-
-## Run root rotation
-
-By default it logs a skip unless explicitly enabled:
-
-```bash
-QIMEM_ROOT_ROTATION_ENABLED=true cargo run --bin qimem-root-rotation -- --dry-run
-```
-
-## Dashboard client
-
-A Tailwind + React dashboard lives in `client/`.
-
-```bash
-cd client
-npm install
-npm run dev
-```
-
-The client proxies API calls to `http://127.0.0.1:8080`.
-
-## Docker compose (local MVP)
-
-```bash
-docker compose up -d postgres
-cargo run --bin qimem-api
-```
-
-You can optionally wire API/gateway/client as additional compose services as your local workflow evolves.
+## Production considerations
+- Key material is wrapped with `zeroize::Zeroizing`.
+- No key bytes are logged.
+- `#![deny(missing_docs)]` and `#![deny(unsafe_code)]` are enabled.
+- Use `stateful` mode with managed Postgres and encrypted disks.
