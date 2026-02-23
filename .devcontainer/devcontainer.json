@@ -1,9 +1,9 @@
 {
   "name": "QIMEM Dev",
   "dockerComposeFile": ["../docker-compose.yml"],
-  "service": "app",
-  "workspaceFolder": "/workspace/QIMEM",
-  "runServices": ["app", "postgres"],
+  "service": "qimem-api",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "runServices": ["qimem-api", "postgres"],
   "features": {
     "ghcr.io/devcontainers/features/rust:1": {
       "version": "stable"
