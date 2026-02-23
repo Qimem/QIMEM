@@ -17,6 +17,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    tty: true # Important: keeps the container alive for you to code in
     depends_on:
       postgres:
         condition: service_healthy
