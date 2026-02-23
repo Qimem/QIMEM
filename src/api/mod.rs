@@ -70,19 +70,11 @@ fn map_err(err: QimemError) -> (axum::http::StatusCode, Json<ErrorResponse>) {
 #[derive(Serialize)]
 struct CreateKeyResponse {
     key_id: Uuid,
-    lineage_id: Uuid,
-    version: i32,
-    active: bool,
 }
 
 async fn create_key(State(state): State<AppState>) -> ApiResult<CreateKeyResponse> {
     let key = state.store.create_key().map_err(map_err)?;
-    Ok(Json(CreateKeyResponse {
-        key_id: key.key_id,
-        lineage_id: key.lineage_id,
-        version: key.version,
-        active: key.active,
-    }))
+    Ok(Json(CreateKeyResponse { key_id: key.key_id }))
 }
 
 #[derive(Deserialize)]
