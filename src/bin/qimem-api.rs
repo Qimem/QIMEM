@@ -13,7 +13,7 @@ async fn main() {
         .init();
 
     if let Err(err) = run().await {
-        eprintln!("{{\"error\":\"{}\"}}", err);
+        eprintln!("{{\"error\":\"{err}\"}}");
         std::process::exit(1);
     }
 }

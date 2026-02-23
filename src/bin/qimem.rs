@@ -38,7 +38,7 @@ fn print_json(value: serde_json::Value) -> i32 {
             0
         }
         Err(err) => {
-            eprintln!("{{\"error\":\"{}\"}}", err);
+            eprintln!("{{\"error\":\"{err}\"}}");
             1
         }
     }

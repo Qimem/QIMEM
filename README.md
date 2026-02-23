@@ -46,6 +46,24 @@ docker compose up --build
 curl -fsS http://localhost:8080/health
 ```
 
+## API quickstart (curl)
+```bash
+# Create key
+KEY_ID=$(curl -fsS -X POST http://localhost:8080/keys \
+  -H 'content-type: application/json' \
+  -d '{}' | jq -r '.key_id')
+
+# Encrypt (request field is `input`)
+ENVELOPE=$(curl -fsS -X POST http://localhost:8080/encrypt \
+  -H 'content-type: application/json' \
+  -d "{\"key_id\":\"${KEY_ID}\",\"input\":\"hello\"}" | jq -r '.envelope')
+
+# Decrypt
+curl -fsS -X POST http://localhost:8080/decrypt \
+  -H 'content-type: application/json' \
+  -d "{\"input\":\"${ENVELOPE}\"}"
+```
+
 ## Production considerations
 - Key material is wrapped with `zeroize::Zeroizing`.
 - No key bytes are logged.
