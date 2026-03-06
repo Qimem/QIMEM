@@ -1,48 +1,47 @@
-# QIMEM API
+# QIMEM + QAuth Unified API
 
-## Endpoints
-- `GET /health` -> `{ "status": "ok" }`
-- `POST /keys` -> `{ "key_id": "..." }`
-- `POST /encrypt` -> expects `{ "key_id": "...", "input": "..." }`, returns `{ "envelope": "..." }`
-- `POST /decrypt` -> expects `{ "input": "..." }`, returns `{ "plaintext": "..." }`
-- `POST /rotate` -> rotate key
+## Versioned base path
+- `GET /health`
+- `GET /ready`
+- `GET /v1/security/health`
 
-## Request/response examples
+## Security (QIMEM)
+- `POST /v1/security/keys`
+- `POST /v1/security/encrypt`
+- `POST /v1/security/decrypt`
+- `POST /v1/security/rotate`
 
-### Create key
-```bash
-curl -fsS -X POST http://localhost:8080/keys \
-  -H 'content-type: application/json' \
-  -d '{}'
+## Auth (QAuth)
+- `POST /v1/auth/realms`
+- `POST /v1/auth/roles`
+- `POST /v1/auth/clients`
+- `POST /v1/auth/users`
+- `POST /v1/auth/token`
+- `POST /v1/auth/token/refresh`
+- `POST /v1/auth/token/revoke`
+- `POST /v1/auth/token/introspect`
+- `POST /v1/auth/keys/rotate`
 
-# => {"key_id":"<uuid>"}
-```
+## Plugin manifests
+- `GET /v1/plugins/manifests`
+- `POST /v1/plugins/manifests`
 
-### Encrypt
-Canonical request payload uses `input`:
-
+## Canonical error shape
 ```json
 {
-  "key_id": "<uuid>",
-  "input": "hello"
+  "error": "human readable error"
 }
 ```
 
+## Login Example
 ```bash
-curl -fsS -X POST http://localhost:8080/encrypt \
+curl -X POST http://localhost:8080/v1/auth/token \
   -H 'content-type: application/json' \
-  -d '{"key_id":"<uuid>","input":"hello"}'
-
-# => {"envelope":"<base64-envelope>"}
+  -d '{
+    "client_id":"...",
+    "client_secret":"...",
+    "realm_id":"acme",
+    "username":"alice",
+    "password":"secret"
+  }'
 ```
-
-### Decrypt
-```bash
-curl -fsS -X POST http://localhost:8080/decrypt \
-  -H 'content-type: application/json' \
-  -d '{"input":"<base64-envelope>"}'
-
-# => {"plaintext":"hello"}
-```
-
-QIMEM intentionally has no authentication features.
