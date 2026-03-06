@@ -1,10 +1,10 @@
-# QIMEM — Deterministic Encryption & Key Lifecycle Engine
+# QIMEM Platform — Encryption + QAuth Identity
 
 ## What it is
-QIMEM is a focused encryption engine for deterministic, versioned, auditable envelope encryption and key lifecycle management.
+QIMEM is a unified security platform delivering deterministic encryption/key lifecycle management and a built-in QAuth identity service with JWT issuance, RBAC, MFA (TOTP), token refresh/revocation, and plugin registration APIs.
 
 ## What it is not
-QIMEM does not provide authentication, identity, authorization, or plugin frameworks.
+QIMEM now exposes `/v1/security/*`, `/v1/auth/*`, and `/v1/plugins/*` versioned APIs from the `qauth-api` binary.
 
 ## Architecture
 - `qimem` library: crypto engine, envelope format, key store traits, in-memory store, optional Postgres store (`stateful` feature).
@@ -71,3 +71,14 @@ curl -fsS -X POST http://localhost:8080/decrypt \
 - No key bytes are logged.
 - `#![deny(missing_docs)]` and `#![deny(unsafe_code)]` are enabled.
 - Use `stateful` mode with managed Postgres and encrypted disks.
+
+
+## Unified platform server
+```bash
+cargo run --bin qauth-api
+```
+
+## QAuth CLI
+```bash
+cargo run --bin qauth -- --help
+```

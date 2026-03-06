@@ -9,6 +9,8 @@ pub mod crypto;
 pub mod envelope;
 pub mod error;
 pub mod keystore;
+pub mod platform_api;
+pub mod qauth;
 
 pub use crypto::{Algorithm, CryptoEngine};
 pub use envelope::Envelope;

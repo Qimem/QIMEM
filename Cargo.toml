@@ -15,6 +15,14 @@ path = "src/bin/qimem.rs"
 name = "qimem-api"
 path = "src/bin/qimem-api.rs"
 
+[[bin]]
+name = "qauth"
+path = "src/bin/qauth.rs"
+
+[[bin]]
+name = "qauth-api"
+path = "src/bin/qauth-api.rs"
+
 [features]
 default = []
 chacha = ["dep:chacha20poly1305"]
@@ -38,6 +46,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 chacha20poly1305 = { version = "0.10", optional = true }
 sqlx = { version = "0.7", optional = true, features = ["runtime-tokio", "postgres", "uuid", "migrate", "tls-rustls"] }
+totp-rs = { version = "5.6", default-features = false, features = ["gen_secret", "otpauth"] }
+jsonwebtoken = "9.3"
+argon2 = "0.5"
 
 [dev-dependencies]
 tokio = { version = "1.39", features = ["macros", "rt-multi-thread"] }
