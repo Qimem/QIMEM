@@ -3,3 +3,5 @@
 /web/node_modules
 .env
 .env.local
+.venv
+target/
